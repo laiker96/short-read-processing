@@ -1,0 +1,3 @@
+run_accession	experiment_accession	context_id	context	sample_title	library_layout	spots_millions	fastq_total_GB	selection_status	atlas_use	selection_seed
+ERR3975789	ERX3978771	E5	embryo stage 5 / 2-4h	399_24h_rep2_ATAC_p	PAIRED	13.8	1.578	selected	yes	20260714
+SRR15888034	SRX12178880	EAD	eye / eye-antennal disc	Sample_A4_ED_2	PAIRED	34.7	2.283	selected	yes	20260714

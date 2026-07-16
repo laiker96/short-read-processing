@@ -1,0 +1,10 @@
+cores: all
+software-deployment-method:
+  - conda
+conda-prefix: .snakemake/conda
+resources:
+  mem_mb: 12000
+latency-wait: 60
+printshellcmds: true
+show-failed-logs: true
+rerun-incomplete: true

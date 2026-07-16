@@ -1,0 +1,3 @@
+accession	sample_id	assay	genome	role	control_id	replicate	peak_caller	notes
+ERR3975789	ERR3975789	atac	dm6	treatment		1		Reproducibly selected with seed 20260714
+SRR15888034	SRR15888034	atac	dm6	treatment		1		Reproducibly selected with seed 20260714

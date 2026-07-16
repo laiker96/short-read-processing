@@ -1,0 +1,5 @@
+accession	sample_id	assay	genome	role	control_id	replicate	peak_caller	notes
+SRR10485675	embryo_stage5_h3k27ac_rep1	chip_histone	dm6	treatment	embryo_stage5_input_rep1	1	callpeak	ABC-map-dm6 GSE140539 H3K27ac IP replicate 1
+SRR10485676	embryo_stage5_input_rep1	chip_histone	dm6	control		1		ABC-map-dm6 GSE140539 matched input replicate 1
+SRR10485677	embryo_stage5_h3k27ac_rep2	chip_histone	dm6	treatment	embryo_stage5_input_rep2	2	callpeak	ABC-map-dm6 GSE140539 H3K27ac IP replicate 2
+SRR10485678	embryo_stage5_input_rep2	chip_histone	dm6	control		2		ABC-map-dm6 GSE140539 matched input replicate 2

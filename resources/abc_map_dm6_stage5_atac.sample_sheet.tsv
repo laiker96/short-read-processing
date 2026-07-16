@@ -1,0 +1,4 @@
+accession	sample_id	assay	genome	role	control_id	replicate	peak_caller	notes
+ERR3975804	embryo_stage5_atac_rep1	atac	dm6	treatment		1	hmmratac	ABC-map-dm6 selected biological replicate 1
+ERR3975777	embryo_stage5_atac_rep1	atac	dm6	treatment		1	hmmratac	ABC-map-dm6 technical run for biological replicate 1
+ERR3975789	embryo_stage5_atac_rep2	atac	dm6	treatment		2	hmmratac	ABC-map-dm6 recommended biological replicate 2
