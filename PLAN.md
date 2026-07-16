@@ -41,10 +41,11 @@ flowchart LR
     C --> I[Build or validate Bowtie2 index]
     R --> T[Cutadapt by lane]
     T --> Q[Trimmed FastQC]
-    Q --> A[Bowtie2 alignment]
+    Q --> A[Bowtie2 alignment per technical lane]
     I --> A
-    A --> M[fixmate, coordinate sort, mark duplicates]
-    M --> F[MAPQ, flag, blacklist, and contig filtering]
+    A --> M[Coordinate sort and merge lanes]
+    M --> MD[Mark duplicates per biological library]
+    MD --> F[MAPQ, flag, blacklist, and contig filtering]
     F --> B[Indexed final BAM]
     B --> P{Assay and peak caller}
     P -->|ATAC PE, hmmratac| H[MACS3 hmmratac]
@@ -143,14 +144,18 @@ The sample-sheet schema and semantic validator must reject at least:
    BED inputs, and Bowtie2 index presence.
 2. Run FastQC on every raw lane, Cutadapt on every lane, and FastQC again. Use
    paired mode so mate synchronization is preserved. Keep Cutadapt JSON/logs.
-3. Align all lanes for one library with a read group using Bowtie2. Start with
-   `--very-sensitive`; use `--no-mixed --no-discordant` for PE data and an
-   assay-configured maximum insert size. Stream into SAMtools rather than store
-   SAM files.
-4. Run name sort, `samtools fixmate -m`, coordinate sort, and `samtools markdup`.
-   Keep a marked, unfiltered BAM for duplicate/mitochondrial QC and a final BAM
-   filtered by layout-appropriate flags, MAPQ, blacklist, excluded contigs, and
-   duplicate policy. Record counts at every boundary.
+3. Align each technical lane independently with its own read group using
+   Bowtie2. Start with `--very-sensitive`; use `--no-mixed --no-discordant` for
+   PE data and an assay-configured maximum insert size. Stream into SAMtools
+   rather than store SAM files. A lane job reserves four cores and gives three
+   worker threads to the active Bowtie2 or SAMtools command, leaving one core
+   for the main process or the lightweight `samtools view` pipe stage.
+4. Name-sort and run `samtools fixmate -m` per lane, coordinate-sort the lane
+   BAMs, then merge all lanes for one biological library and run `samtools
+   markdup` across the merged BAM. Keep a marked, unfiltered BAM for
+   duplicate/mitochondrial QC and a final BAM filtered by layout-appropriate
+   flags, MAPQ, blacklist, excluded contigs, and duplicate policy. Record counts
+   at every boundary.
 5. Call peaks from the final BAM. Use MACS3 `BAMPE` for paired-end ATAC/ChIP;
    use the documented SE model/shift settings only for SE. TF ChIP defaults to
    narrow peaks; histone ChIP defaults to broad peaks but permits an explicit
@@ -188,7 +193,11 @@ run. Defaults must be documented as guidance, not universal biological truth.
 
 ## Parallelism and resources
 
-- Raw QC and trimming run per lane; libraries run independently.
+- Raw QC, trimming, and alignment run per lane; libraries run independently.
+- Each lane alignment reserves four cores but uses three Bowtie2/SAMtools worker
+  threads. Pipe stages do not each receive the full allocation, preventing
+  nested thread oversubscription. Lane BAMs merge before library-level duplicate
+  marking.
 - Bowtie2, Cutadapt, FastQC, SAMtools sort/compression, deepTools, ataqv, and
   MultiQC receive rule-level thread counts where supported.
 - Global `--cores` and `mem_mb` resources prevent the product of concurrent jobs
@@ -196,10 +205,11 @@ run. Defaults must be documented as guidance, not universal biological truth.
 - Large alignment/peak intermediates are marked `temp()` only after downstream
   outputs are verified; raw FASTQs and canonical BAMs are never overwritten.
 - `benchmark:` files capture wall time, CPU, and memory for later tuning.
-- Use `profiles/local/config.yaml`, including its repo-relative
-  `.snakemake/conda` environment prefix, and add a SLURM executor profile only
-  when a target cluster is known; do not bake machine-specific paths into the
-  workflow.
+- Use `profiles/local/config.yaml` for one host or the generic
+  `profiles/slurm/config.yaml` for a shared-filesystem SLURM cluster. Both keep
+  rule environments in repo-relative `.snakemake/conda`; account, partition,
+  aggregate core, and queue limits remain profile/CLI settings rather than
+  machine-specific workflow code.
 
 ## Agent-ready tuning without autonomous behavior in v1
 

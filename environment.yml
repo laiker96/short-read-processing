@@ -5,8 +5,9 @@ channels:
 dependencies:
   - python=3.11
   - snakemake-minimal=9.23.1
+  - snakemake-executor-plugin-slurm=2.7.1
   - pyyaml=6.0.3
-  - pandas=3.0.3
+  - pandas=2.3.3
   - jsonschema=4.26.0
   - pytest=9.1.1
   - graphviz=13.1.2

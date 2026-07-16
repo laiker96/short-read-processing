@@ -1,0 +1,15 @@
+# Generic shared-filesystem SLURM profile. Cluster-specific accounts,
+# partitions, and limits should be supplied by the user or site profile.
+executor: slurm
+jobs: 100
+local-cores: 1
+software-deployment-method:
+  - conda
+conda-prefix: .snakemake/conda
+default-resources:
+  mem_mb: 2000
+  runtime: 720
+latency-wait: 120
+printshellcmds: true
+show-failed-logs: true
+rerun-incomplete: true

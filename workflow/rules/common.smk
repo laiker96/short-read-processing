@@ -36,14 +36,33 @@ def adapter_value(wildcards, mate):
     return TRUSEQ_R1_ADAPTER if mate == "r1" else TRUSEQ_R2_ADAPTER
 
 
-def bowtie_read_arguments(wildcards):
-    sample = wildcards.sample
-    lanes = [lane for candidate, lane in LANES if candidate == sample]
-    r1 = [TRIMMED_R1[(sample, lane)] for lane in lanes]
-    if SAMPLES[sample]["layout"] == "paired":
-        r2 = [TRIMMED_R2[(sample, lane)] for lane in lanes]
-        return "-1 " + shlex.quote(",".join(r1)) + " -2 " + shlex.quote(",".join(r2))
-    return "-U " + shlex.quote(",".join(r1))
+def trimmed_lane_reads(wildcards):
+    key = (wildcards.sample, wildcards.lane)
+    reads = [TRIMMED_R1[key]]
+    if SAMPLES[wildcards.sample]["layout"] == "paired":
+        reads.append(TRIMMED_R2[key])
+    return reads
+
+
+def bowtie_lane_arguments(wildcards):
+    key = (wildcards.sample, wildcards.lane)
+    r1 = shlex.quote(TRIMMED_R1[key])
+    if SAMPLES[wildcards.sample]["layout"] == "paired":
+        r2 = shlex.quote(TRIMMED_R2[key])
+        return f"-1 {r1} -2 {r2}"
+    return f"-U {r1}"
+
+
+def sample_lane_bams(wildcards):
+    return [
+        LANE_BAMS[(sample, lane)]
+        for sample, lane in LANES
+        if sample == wildcards.sample
+    ]
+
+
+def worker_threads(wildcards, threads):
+    return max(1, threads - 1)
 
 
 def bowtie_layout_arguments(wildcards):

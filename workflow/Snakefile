@@ -53,21 +53,24 @@ PE_LANES = [key for key in LANES if SAMPLES[key[0]]["layout"] == "paired"]
 SE_LANES = [key for key in LANES if SAMPLES[key[0]]["layout"] == "single"]
 PE_SAMPLE_RE = wildcard_regex(sorted({sample for sample, _lane in PE_LANES}))
 SE_SAMPLE_RE = wildcard_regex(sorted({sample for sample, _lane in SE_LANES}))
+LANE_RE = wildcard_regex(sorted({lane for _sample, lane in LANES}))
 
 TRIMMED_R1 = {}
 TRIMMED_R2 = {}
-TRIMMED_READS_BY_SAMPLE = {sample: [] for sample in SAMPLE_IDS}
 for sample_id, lane in LANES:
     suffix = "R1" if SAMPLES[sample_id]["layout"] == "paired" else "SE"
     r1_path = f"{WORK_ROOT}/trimmed/{sample_id}/{lane}_{suffix}.fastq.gz"
     TRIMMED_R1[(sample_id, lane)] = r1_path
     TRIMMED_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R1"] = r1_path
-    TRIMMED_READS_BY_SAMPLE[sample_id].append(r1_path)
     if SAMPLES[sample_id]["layout"] == "paired":
         r2_path = f"{WORK_ROOT}/trimmed/{sample_id}/{lane}_R2.fastq.gz"
         TRIMMED_R2[(sample_id, lane)] = r2_path
         TRIMMED_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R2"] = r2_path
-        TRIMMED_READS_BY_SAMPLE[sample_id].append(r2_path)
+
+LANE_BAMS = {
+    key: f"{WORK_ROOT}/alignment/lanes/{key[0]}.{key[1]}.coordsort.bam"
+    for key in LANES
+}
 
 
 REFERENCE = config["reference"]

@@ -17,6 +17,14 @@ from short_read_processing.sample_sheet import DEFAULT_SCHEMA, sample_sheet_acce
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def rule_threads(value: str) -> str:
+    """Validate a Snakemake RULE=THREADS override."""
+    rule, separator, threads = value.rpartition("=")
+    if not separator or not rule or not threads.isdigit() or int(threads) < 1:
+        raise argparse.ArgumentTypeError("use RULE=THREADS with a positive thread count")
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sample_sheet", type=Path, help="Canonical accession CSV/TSV")
@@ -31,7 +39,25 @@ def main() -> int:
         type=Path,
         default=REPO_ROOT / "profiles" / "local",
     )
-    parser.add_argument("--cores", type=int, help="Override profile core count")
+    parser.add_argument(
+        "--cores",
+        type=int,
+        help="Maximum aggregate cores (local or across submitted cluster jobs)",
+    )
+    parser.add_argument("--jobs", type=int, help="Maximum concurrent cluster jobs")
+    parser.add_argument(
+        "--max-threads",
+        type=int,
+        help="Maximum threads/CPUs requested by any individual rule",
+    )
+    parser.add_argument(
+        "--set-threads",
+        action="append",
+        default=[],
+        type=rule_threads,
+        metavar="RULE=THREADS",
+        help="Override one rule's thread count; repeat for additional rules",
+    )
     parser.add_argument("--skip-download", action="store_true", help="Reuse --manifest")
     parser.add_argument("--download-only", action="store_true")
     parser.add_argument("--config-only", action="store_true")
@@ -46,6 +72,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.cores is not None and args.cores < 1:
         parser.error("--cores must be positive")
+    if args.jobs is not None and args.jobs < 1:
+        parser.error("--jobs must be positive")
+    if args.max_threads is not None and args.max_threads < 1:
+        parser.error("--max-threads must be positive")
     if args.download_only and args.config_only:
         parser.error("--download-only and --config-only are mutually exclusive")
 
@@ -95,6 +125,12 @@ def main() -> int:
         ]
         if args.cores is not None:
             command.extend(["--cores", str(args.cores)])
+        if args.jobs is not None:
+            command.extend(["--jobs", str(args.jobs)])
+        if args.max_threads is not None:
+            command.extend(["--max-threads", str(args.max_threads)])
+        if args.set_threads:
+            command.extend(["--set-threads", *args.set_threads])
         if args.snakemake_dry_run:
             command.append("--dry-run")
         command.extend(args.snakemake_arg)

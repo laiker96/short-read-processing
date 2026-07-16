@@ -55,6 +55,54 @@ existing checksum-verified download. `--download-only`, `--config-only`, and
 `--snakemake-dry-run` stop at the corresponding boundary. Samples and lanes are
 scheduled independently subject to the local core and memory profile.
 
+Each technical lane is trimmed and aligned independently with a four-core job.
+The lane BAMs are coordinate-sorted, merged by biological library, and only then
+duplicate-marked. Thus, a 12-core run can align three lanes concurrently without
+assigning the same cores simultaneously to Bowtie2 and SAMtools sort.
+
+## Run on SLURM
+
+The generic `profiles/slurm/config.yaml` uses Snakemake's SLURM executor on a
+shared filesystem. Every rule's `threads` value becomes its per-job CPU request;
+SLURM determines which node runs it, while Snakemake submits independent lanes
+and samples concurrently. The profile limits queued/running workflow jobs to 100
+but deliberately does not impose an aggregate cluster-wide core limit.
+
+Run with the cluster profile and optionally tune the submission limits and
+per-rule CPUs from the launcher:
+
+```bash
+mamba run --prefix "$PWD/.venv" \
+  python src/run_pipeline.py samples.tsv \
+  --project chromatin-study \
+  --run-id baseline \
+  --workflow-profile profiles/slurm \
+  --jobs 50 \
+  --cores 200 \
+  --max-threads 16 \
+  --set-threads align_lane=8 \
+  --set-threads build_bowtie2_index=16
+```
+
+Here, `--jobs` caps simultaneous SLURM jobs, `--cores` caps their aggregate CPU
+requests, and `--max-threads` caps any one job. `--set-threads` overrides a
+specific rule and is repeatable. Omit `--cores` to let the job cap alone bound
+submission. Add cluster-specific defaults such as an account or partition by
+copying the profile and adding them under `default-resources`:
+
+```yaml
+default-resources:
+  mem_mb: 2000
+  runtime: 720
+  slurm_account: my_account
+  slurm_partition: compute
+```
+
+The orchestration environment includes the SLURM executor plugin. Re-run the
+repository-local Mamba environment command after pulling this change. The
+cluster nodes must see the repository, inputs, results, and `.snakemake/conda`
+through the same shared filesystem paths.
+
 For generated `dm6` and `hg38` configs, reference preparation is part of the
 Snakemake DAG. The workflow downloads checksum-pinned UCSC FASTA and NCBI
 RefSeq GTF archives plus the ENCODE v2 blacklist, then creates:

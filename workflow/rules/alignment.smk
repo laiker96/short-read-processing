@@ -1,32 +1,68 @@
-rule align_and_mark_duplicates:
+rule align_lane:
     input:
-        reads=lambda wc: TRIMMED_READS_BY_SAMPLE[wc.sample],
+        reads=trimmed_lane_reads,
         index=BT2_INDEX
     output:
-        bam=f"{WORK_ROOT}/alignment/{{sample}}.marked.bam"
+        bam=temp(f"{WORK_ROOT}/alignment/lanes/{{sample}}.{{lane}}.coordsort.bam")
     log:
-        f"{RESULT_ROOT}/logs/alignment/{{sample}}.bowtie2.log"
+        f"{RESULT_ROOT}/logs/alignment/{{sample}}.{{lane}}.bowtie2.log"
     params:
-        reads=bowtie_read_arguments,
+        reads=bowtie_lane_arguments,
         layout=bowtie_layout_arguments,
         preset=bowtie_preset,
-        index=lambda wc, input: str(input.index[0]).removesuffix(".1.bt2")
-    threads: 8
+        index=lambda wc, input: str(input.index[0]).removesuffix(".1.bt2"),
+        workers=worker_threads
+    threads: 4
     resources:
-        mem_mb=8000
+        mem_mb=4000
     conda:
         "../envs/alignment.yaml"
+    wildcard_constraints:
+        sample=SAMPLE_RE,
+        lane=LANE_RE
     shell:
         r"""
         mkdir -p $(dirname {output.bam:q}) $(dirname {log:q})
         bowtie2 {params.preset} {params.layout} -x {params.index:q} {params.reads} \
-          --rg-id {wildcards.sample:q} --rg SM:{wildcards.sample:q} -p {threads} 2> {log:q} \
-          | samtools view -u - \
-          | samtools sort -n -@ {threads} -o {output.bam:q}.namesort.bam
-        samtools fixmate -@ {threads} -m {output.bam:q}.namesort.bam {output.bam:q}.fixmate.bam
-        samtools sort -@ {threads} -o {output.bam:q}.coordsort.bam {output.bam:q}.fixmate.bam
-        samtools markdup -@ {threads} {output.bam:q}.coordsort.bam {output.bam:q}
-        rm -f {output.bam:q}.namesort.bam {output.bam:q}.fixmate.bam {output.bam:q}.coordsort.bam
+          --rg-id {wildcards.sample:q}.{wildcards.lane:q} --rg SM:{wildcards.sample:q} \
+          -p {params.workers} 2> {log:q} \
+          | samtools view -u -o {output.bam:q}.unsorted.bam - 2>> {log:q}
+        samtools sort -n -@ {params.workers} \
+          -o {output.bam:q}.namesort.bam {output.bam:q}.unsorted.bam 2>> {log:q}
+        samtools fixmate -@ {params.workers} -m \
+          {output.bam:q}.namesort.bam {output.bam:q}.fixmate.bam 2>> {log:q}
+        samtools sort -@ {params.workers} \
+          -o {output.bam:q} {output.bam:q}.fixmate.bam 2>> {log:q}
+        rm -f {output.bam:q}.unsorted.bam {output.bam:q}.namesort.bam {output.bam:q}.fixmate.bam
+        samtools quickcheck -v {output.bam:q} 2>> {log:q}
+        """
+
+
+rule merge_and_mark_duplicates:
+    input:
+        bams=sample_lane_bams
+    output:
+        bam=f"{WORK_ROOT}/alignment/{{sample}}.marked.bam"
+    log:
+        f"{RESULT_ROOT}/logs/alignment/{{sample}}.merge-markdup.log"
+    params:
+        workers=worker_threads
+    threads: 4
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/alignment.yaml"
+    wildcard_constraints:
+        sample=SAMPLE_RE
+    shell:
+        r"""
+        mkdir -p $(dirname {output.bam:q}) $(dirname {log:q})
+        samtools merge -f -@ {params.workers} \
+          -o {output.bam:q}.merged.bam {input.bams:q} > {log:q} 2>&1
+        samtools markdup -@ {params.workers} \
+          {output.bam:q}.merged.bam {output.bam:q} >> {log:q} 2>&1
+        rm -f {output.bam:q}.merged.bam
+        samtools quickcheck -v {output.bam:q} 2>> {log:q}
         """
 
 

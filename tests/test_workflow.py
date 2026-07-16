@@ -1,5 +1,6 @@
 import copy
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -85,6 +86,41 @@ def test_workflow_branches_dry_run(tmp_path, branch):
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_technical_lanes_align_separately_then_merge(tmp_path):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["output_dir"] = str(tmp_path / "results")
+    sample = config["samples"][0]
+    sample["accessions"].append("SRR123457")
+    sample["r1"].append(sample["r1"][0])
+    sample["r2"].append(sample["r2"][0])
+
+    config_path = tmp_path / "two-lanes.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+    snakemake = Path(sys.executable).with_name("snakemake")
+    environment = os.environ.copy()
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [
+            str(snakemake),
+            "--snakefile",
+            "workflow/Snakefile",
+            "--configfile",
+            str(config_path),
+            "--cores",
+            "8",
+            "--dry-run",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert re.search(r"align_lane\s+2", output)
+    assert re.search(r"merge_and_mark_duplicates\s+1", output)
 
 
 def test_workflow_config_rejects_callpeak_without_bedgraphs():
