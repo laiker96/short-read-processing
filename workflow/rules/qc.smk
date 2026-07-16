@@ -1,0 +1,270 @@
+import json
+
+
+rule resolved_config_provenance:
+    output:
+        config=RESOLVED_CONFIG
+    params:
+        config=json.dumps(config, sort_keys=True)
+    conda:
+        "../envs/reporting.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/provenance/resolved_config.log"
+    script:
+        "../scripts/write_provenance.py"
+
+
+rule bigwig_cpm:
+    input:
+        bam=f"{RESULT_ROOT}/bam/{{sample}}.final.bam",
+        bai=f"{RESULT_ROOT}/bam/{{sample}}.final.bam.bai",
+        chrom_sizes=str(REFERENCE["chrom_sizes"])
+    output:
+        bw=f"{RESULT_ROOT}/tracks/{{sample}}.CPM.bw"
+    wildcard_constraints:
+        sample=SAMPLE_RE
+    threads: 6
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/tracks/{{sample}}.bamCoverage.log"
+    shell:
+        "mkdir -p $(dirname {output.bw:q}) $(dirname {log:q}) && "
+        "bamCoverage -b {input.bam:q} -o {output.bw:q} --outFileFormat bigwig "
+        "--normalizeUsing CPM --binSize 10 --numberOfProcessors {threads} > {log:q} 2>&1"
+
+
+rule atac_shift_bam:
+    input:
+        bam=f"{RESULT_ROOT}/bam/{{sample}}.final.bam"
+    output:
+        bam=f"{WORK_ROOT}/atac_shift/{{sample}}.shifted.bam",
+        bai=f"{WORK_ROOT}/atac_shift/{{sample}}.shifted.bam.bai"
+    wildcard_constraints:
+        sample=ATAC_RE
+    threads: 6
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/tracks/{{sample}}.alignmentSieve.log"
+    shell:
+        "mkdir -p $(dirname {output.bam:q}) $(dirname {log:q}) && "
+        "alignmentSieve --ATACshift -b {input.bam:q} -o {output.bam:q}.unsorted "
+        "--numberOfProcessors {threads} > {log:q} 2>&1 && "
+        "samtools sort -@ {threads} -o {output.bam:q} {output.bam:q}.unsorted && "
+        "rm -f {output.bam:q}.unsorted && samtools index -@ {threads} {output.bam:q} {output.bai:q}"
+
+
+rule atac_shifted_bigwig:
+    input:
+        bam=f"{WORK_ROOT}/atac_shift/{{sample}}.shifted.bam",
+        bai=f"{WORK_ROOT}/atac_shift/{{sample}}.shifted.bam.bai"
+    output:
+        bw=f"{RESULT_ROOT}/tracks/{{sample}}.Tn5-shifted.CPM.bw"
+    wildcard_constraints:
+        sample=ATAC_RE
+    threads: 6
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/tracks/{{sample}}.shifted.bamCoverage.log"
+    shell:
+        "mkdir -p $(dirname {output.bw:q}) $(dirname {log:q}) && "
+        "bamCoverage -b {input.bam:q} -o {output.bw:q} --outFileFormat bigwig "
+        "--normalizeUsing CPM --binSize 10 --numberOfProcessors {threads} > {log:q} 2>&1"
+
+
+rule atac_tss_matrix:
+    input:
+        bw=f"{RESULT_ROOT}/tracks/{{sample}}.Tn5-shifted.CPM.bw",
+        tss=str(REFERENCE["tss_bed"])
+    output:
+        matrix=f"{RESULT_ROOT}/qc/tss/{{sample}}.matrix.gz",
+        table=f"{RESULT_ROOT}/qc/tss/{{sample}}.matrix.tsv"
+    wildcard_constraints:
+        sample=ATAC_RE
+    threads: 4
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/{{sample}}.computeMatrix.log"
+    shell:
+        "mkdir -p $(dirname {output.matrix:q}) $(dirname {log:q}) && "
+        "computeMatrix reference-point --referencePoint TSS -S {input.bw:q} -R {input.tss:q} "
+        "-b 2000 -a 2000 --skipZeros --numberOfProcessors {threads} "
+        "-o {output.matrix:q} --outFileNameMatrix {output.table:q} > {log:q} 2>&1"
+
+
+rule atac_tss_profile:
+    input:
+        matrix=f"{RESULT_ROOT}/qc/tss/{{sample}}.matrix.gz"
+    output:
+        plot=f"{RESULT_ROOT}/qc/tss/{{sample}}.profile.png"
+    wildcard_constraints:
+        sample=ATAC_RE
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/{{sample}}.plotProfile.log"
+    shell:
+        "plotProfile -m {input.matrix:q} -out {output.plot:q} --perGroup > {log:q} 2>&1"
+
+
+rule atac_fragment_histogram:
+    input:
+        bam=f"{RESULT_ROOT}/bam/{{sample}}.final.bam"
+    output:
+        histogram=f"{RESULT_ROOT}/qc/fragments/{{sample}}.histogram.tsv"
+    wildcard_constraints:
+        sample=ATAC_RE
+    conda:
+        "../envs/alignment.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/{{sample}}.fragment_histogram.log"
+    shell:
+        r"""
+        mkdir -p $(dirname {output.histogram:q})
+        printf 'fragment_length\tcount\n' > {output.histogram:q}
+        samtools view {input.bam:q} 2> {log:q} \
+          | awk '$9 > 0 {{print $9}}' \
+          | sort -n \
+          | uniq -c \
+          | awk 'BEGIN{{OFS="\t"}} {{print $2,$1}}' >> {output.histogram:q}
+        """
+
+
+rule frip:
+    input:
+        bam=lambda wc: FINAL_BAMS[wc.sample],
+        peaks=lambda wc: PEAKS[wc.sample]
+    output:
+        tsv=f"{RESULT_ROOT}/qc/frip/{{sample}}.tsv",
+        json=f"{RESULT_ROOT}/qc/frip/{{sample}}.json"
+    params:
+        layout=lambda wc: SAMPLES[wc.sample]["layout"]
+    threads: 4
+    resources:
+        mem_mb=4000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/{{sample}}.frip.log"
+    script:
+        "../scripts/frip.py"
+
+
+rule chip_fingerprint:
+    input:
+        treatment=lambda wc: FINAL_BAMS[wc.sample],
+        control=lambda wc: FINAL_BAMS[SAMPLES[wc.sample]["control"]]
+    output:
+        plot=f"{RESULT_ROOT}/qc/chip/{{sample}}.fingerprint.png",
+        counts=f"{RESULT_ROOT}/qc/chip/{{sample}}.fingerprint_counts.tsv"
+    params:
+        control_label=lambda wc: SAMPLES[wc.sample]["control"]
+    wildcard_constraints:
+        sample=CHIP_TREATMENT_RE
+    threads: 4
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/{{sample}}.fingerprint.log"
+    shell:
+        "mkdir -p $(dirname {output.plot:q}) $(dirname {log:q}) && "
+        "plotFingerprint -b {input.treatment:q} {input.control:q} "
+        "--labels {wildcards.sample:q} {params.control_label:q} "
+        "--plotFile {output.plot:q} --outRawCounts {output.counts:q} "
+        "--numberOfProcessors {threads} > {log:q} 2>&1"
+
+
+rule chip_cross_correlation:
+    input:
+        bam=lambda wc: FINAL_BAMS[wc.sample]
+    output:
+        metrics=f"{RESULT_ROOT}/qc/chip/{{sample}}.cross_correlation.txt",
+        plot=f"{RESULT_ROOT}/qc/chip/{{sample}}.cross_correlation.pdf"
+    wildcard_constraints:
+        sample=CHIP_TREATMENT_RE
+    threads: 4
+    resources:
+        mem_mb=6000
+    conda:
+        "../envs/chip_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/{{sample}}.cross_correlation.log"
+    shell:
+        "mkdir -p $(dirname {output.metrics:q}) $(dirname {log:q}) && "
+        "run_spp.R -c={input.bam:q} -p={threads} -savp={output.plot:q} "
+        "-out={output.metrics:q} > {log:q} 2>&1"
+
+
+METRICS_MANIFEST = {
+    sample: {
+        "assay": ASSAY,
+        "layout": SAMPLES[sample]["layout"],
+        "role": SAMPLES[sample]["role"],
+        "flagstat": FLAGSTATS[sample],
+        "frip": FRIP_JSON.get(sample),
+        "peaks": PEAKS.get(sample),
+    }
+    for sample in SAMPLE_IDS
+}
+
+
+rule metrics_summary:
+    input:
+        flagstats=list(FLAGSTATS.values()),
+        frip=list(FRIP_JSON.values()),
+        peaks=list(PEAKS.values())
+    output:
+        tsv=METRICS_TSV,
+        json=METRICS_JSON
+    params:
+        manifest=json.dumps(METRICS_MANIFEST, sort_keys=True)
+    conda:
+        "../envs/reporting.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/metrics_summary.log"
+    script:
+        "../scripts/aggregate_metrics.py"
+
+
+ALIGNMENT_QC_FILES = [
+    f"{RESULT_ROOT}/qc/alignment/{sample}.{suffix}.txt"
+    for sample in SAMPLE_IDS
+    for suffix in ("flagstat", "stats", "idxstats")
+]
+
+
+rule multiqc:
+    input:
+        raw_fastqc=RAW_FASTQC,
+        trimmed_fastqc=TRIMMED_FASTQC,
+        cutadapt=CUTADAPT_JSON,
+        alignment=ALIGNMENT_QC_FILES,
+        frip=list(FRIP_TSV.values()),
+        metrics=METRICS_TSV,
+        cross_correlation=list(CROSSCORRELATION.values())
+    output:
+        report=MULTIQC_REPORT
+    params:
+        outdir=lambda wc, output: str(Path(output.report).parent),
+        scan=lambda wc, output: str(Path(output.report).parents[2])
+    conda:
+        "../envs/reporting.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/qc/multiqc.log"
+    shell:
+        "mkdir -p {params.outdir:q} $(dirname {log:q}) && "
+        "multiqc {params.scan:q} --outdir {params.outdir:q} "
+        "--filename multiqc_report.html --force > {log:q} 2>&1"

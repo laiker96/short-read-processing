@@ -1,0 +1,9 @@
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - cutadapt=5.2
+  - fastqc=0.12.1
+  - pigz=2.8
+

@@ -1,0 +1,14 @@
+# Rule environments
+
+These files define isolated tool groups for Snakemake rules. With the local
+profile, Snakemake creates resolved environments under `.snakemake/conda` in the
+repository root. Do not create them as named environments in Mamba's global
+environment directory.
+
+- `read_qc.yaml`: raw/trimmed FASTQ QC and adapter trimming
+- `alignment.yaml`: short-read alignment and BAM filtering
+- `peaks.yaml`: MACS3 peak calling, including HMMRATAC
+- `atac_qc.yaml`: ATAC-specific and coverage QC
+- `chip_qc.yaml`: R-based ChIP cross-correlation QC only
+- `reporting.yaml`: MultiQC aggregation
+

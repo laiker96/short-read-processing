@@ -1,0 +1,10 @@
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11
+  - aria2=1.37.0
+  - pigz=2.8
+  - bowtie2=2.5.5
+  - samtools=1.23.1

@@ -1,0 +1,209 @@
+"""Accession-resolved ATAC-seq and ChIP-seq processing workflow."""
+
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+REPO_ROOT = Path(workflow.basedir).parent.resolve()
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from short_read_processing.workflow_config import (
+    resolve_input_paths,
+    validate_workflow_config,
+    wildcard_regex,
+)
+
+
+if not config:
+    raise ValueError("Pass a resolved YAML with --configfile")
+validate_workflow_config(config)
+resolve_input_paths(config, Path.cwd())
+
+PROJECT = str(config["project"])
+RUN_ID = str(config["run_id"])
+ASSAY = str(config["assay"])
+RESULT_ROOT = str(Path(config["output_dir"]) / PROJECT / RUN_ID)
+WORK_ROOT = str(Path("work") / PROJECT / RUN_ID)
+SAMPLES = {str(sample["id"]): sample for sample in config["samples"]}
+SAMPLE_IDS = list(SAMPLES)
+TREATMENTS = [sample_id for sample_id in SAMPLE_IDS if SAMPLES[sample_id]["role"] == "treatment"]
+CHIP_TREATMENTS = TREATMENTS if ASSAY.startswith("chip") else []
+ATAC_SAMPLES = SAMPLE_IDS if ASSAY == "atac" else []
+
+SAMPLE_RE = wildcard_regex(SAMPLE_IDS)
+ATAC_RE = wildcard_regex(ATAC_SAMPLES)
+CHIP_TREATMENT_RE = wildcard_regex(CHIP_TREATMENTS)
+
+LANES = {}
+RAW_FASTQ_BY_UNIT = {}
+TRIMMED_FASTQ_BY_UNIT = {}
+for sample_id, sample in SAMPLES.items():
+    for index, r1 in enumerate(sample["r1"], start=1):
+        lane = f"L{index:03d}"
+        key = (sample_id, lane)
+        LANES[key] = {"r1": r1, "r2": None}
+        RAW_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R1"] = r1
+        if sample["layout"] == "paired":
+            r2 = sample["r2"][index - 1]
+            LANES[key]["r2"] = r2
+            RAW_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R2"] = r2
+
+PE_LANES = [key for key in LANES if SAMPLES[key[0]]["layout"] == "paired"]
+SE_LANES = [key for key in LANES if SAMPLES[key[0]]["layout"] == "single"]
+PE_SAMPLE_RE = wildcard_regex(sorted({sample for sample, _lane in PE_LANES}))
+SE_SAMPLE_RE = wildcard_regex(sorted({sample for sample, _lane in SE_LANES}))
+
+TRIMMED_R1 = {}
+TRIMMED_R2 = {}
+TRIMMED_READS_BY_SAMPLE = {sample: [] for sample in SAMPLE_IDS}
+for sample_id, lane in LANES:
+    suffix = "R1" if SAMPLES[sample_id]["layout"] == "paired" else "SE"
+    r1_path = f"{WORK_ROOT}/trimmed/{sample_id}/{lane}_{suffix}.fastq.gz"
+    TRIMMED_R1[(sample_id, lane)] = r1_path
+    TRIMMED_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R1"] = r1_path
+    TRIMMED_READS_BY_SAMPLE[sample_id].append(r1_path)
+    if SAMPLES[sample_id]["layout"] == "paired":
+        r2_path = f"{WORK_ROOT}/trimmed/{sample_id}/{lane}_R2.fastq.gz"
+        TRIMMED_R2[(sample_id, lane)] = r2_path
+        TRIMMED_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R2"] = r2_path
+        TRIMMED_READS_BY_SAMPLE[sample_id].append(r2_path)
+
+
+REFERENCE = config["reference"]
+REFERENCE_PREPARATION = REFERENCE.get("preparation")
+AUTO_PREPARE_REFERENCE = bool(
+    REFERENCE_PREPARATION and REFERENCE_PREPARATION.get("mode") == "download"
+)
+REFERENCE_SOURCE_DIR = Path(REFERENCE["fasta"]).parent / "sources"
+if AUTO_PREPARE_REFERENCE:
+    REFERENCE_FASTA_ARCHIVE = str(
+        REFERENCE_SOURCE_DIR / Path(urlparse(REFERENCE_PREPARATION["fasta"]["url"]).path).name
+    )
+    REFERENCE_ANNOTATION_ARCHIVE = str(
+        REFERENCE_SOURCE_DIR
+        / Path(urlparse(REFERENCE_PREPARATION["annotation"]["url"]).path).name
+    )
+    REFERENCE_BLACKLIST_ARCHIVE = str(
+        REFERENCE_SOURCE_DIR
+        / Path(urlparse(REFERENCE_PREPARATION["blacklist"]["url"]).path).name
+    )
+BT2_PREFIX = str(REFERENCE["bowtie2_index"])
+BT2_SUFFIXES = [".1.bt2", ".2.bt2", ".3.bt2", ".4.bt2", ".rev.1.bt2", ".rev.2.bt2"]
+BT2_INDEX = [BT2_PREFIX + suffix for suffix in BT2_SUFFIXES]
+FASTA_INDEX = str(REFERENCE["fasta"]) + ".fai"
+
+FINAL_BAMS = {sample: f"{RESULT_ROOT}/bam/{sample}.final.bam" for sample in SAMPLE_IDS}
+FINAL_BAIS = {sample: FINAL_BAMS[sample] + ".bai" for sample in SAMPLE_IDS}
+BIGWIGS = {sample: f"{RESULT_ROOT}/tracks/{sample}.CPM.bw" for sample in SAMPLE_IDS}
+ATAC_SHIFTED_BIGWIGS = {
+    sample: f"{RESULT_ROOT}/tracks/{sample}.Tn5-shifted.CPM.bw" for sample in ATAC_SAMPLES
+}
+
+CALLPEAK_NARROW = [
+    sample for sample in TREATMENTS
+    if SAMPLES[sample]["peak_caller"]["command"] == "callpeak"
+    and not SAMPLES[sample]["peak_caller"]["broad"]
+]
+CALLPEAK_BROAD = [
+    sample for sample in TREATMENTS
+    if SAMPLES[sample]["peak_caller"]["command"] == "callpeak"
+    and SAMPLES[sample]["peak_caller"]["broad"]
+]
+HMMRATAC = [
+    sample for sample in TREATMENTS
+    if SAMPLES[sample]["peak_caller"]["command"] == "hmmratac"
+]
+CALLPEAK_NARROW_RE = wildcard_regex(CALLPEAK_NARROW)
+CALLPEAK_BROAD_RE = wildcard_regex(CALLPEAK_BROAD)
+HMMRATAC_RE = wildcard_regex(HMMRATAC)
+
+PEAKS = {
+    sample: (
+        f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.broadPeak"
+        if sample in CALLPEAK_BROAD
+        else f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.narrowPeak"
+    )
+    for sample in TREATMENTS
+}
+CALLPEAK_BEDGRAPHS = [
+    path
+    for sample in CALLPEAK_NARROW + CALLPEAK_BROAD
+    for path in (
+        f"{RESULT_ROOT}/peaks/{sample}/{sample}_treat_pileup.bdg",
+        f"{RESULT_ROOT}/peaks/{sample}/{sample}_control_lambda.bdg",
+    )
+]
+
+RAW_FASTQC = [
+    f"{RESULT_ROOT}/qc/fastqc/raw/{unit}.{extension}"
+    for unit in RAW_FASTQ_BY_UNIT
+    for extension in ("html", "zip")
+]
+TRIMMED_FASTQC = [
+    f"{RESULT_ROOT}/qc/fastqc/trimmed/{unit}.{extension}"
+    for unit in TRIMMED_FASTQ_BY_UNIT
+    for extension in ("html", "zip")
+]
+CUTADAPT_JSON = [
+    f"{RESULT_ROOT}/qc/cutadapt/{sample}.{lane}.json" for sample, lane in LANES
+]
+FLAGSTATS = {sample: f"{RESULT_ROOT}/qc/alignment/{sample}.flagstat.txt" for sample in SAMPLE_IDS}
+FRIP_JSON = {sample: f"{RESULT_ROOT}/qc/frip/{sample}.json" for sample in TREATMENTS}
+FRIP_TSV = {sample: f"{RESULT_ROOT}/qc/frip/{sample}.tsv" for sample in TREATMENTS}
+TSS_PLOTS = {sample: f"{RESULT_ROOT}/qc/tss/{sample}.profile.png" for sample in ATAC_SAMPLES}
+FRAGMENT_HISTOGRAMS = {
+    sample: f"{RESULT_ROOT}/qc/fragments/{sample}.histogram.tsv" for sample in ATAC_SAMPLES
+}
+FINGERPRINTS = {
+    sample: f"{RESULT_ROOT}/qc/chip/{sample}.fingerprint.png" for sample in CHIP_TREATMENTS
+}
+CROSSCORRELATION = {
+    sample: f"{RESULT_ROOT}/qc/chip/{sample}.cross_correlation.txt"
+    for sample in CHIP_TREATMENTS
+}
+METRICS_TSV = f"{RESULT_ROOT}/qc/metrics.tsv"
+METRICS_JSON = f"{RESULT_ROOT}/qc/metrics.json"
+MULTIQC_REPORT = f"{RESULT_ROOT}/qc/multiqc/multiqc_report.html"
+RESOLVED_CONFIG = f"{RESULT_ROOT}/provenance/resolved_config.json"
+REFERENCE_TARGETS = (
+    BT2_INDEX
+    + [
+        FASTA_INDEX,
+        str(REFERENCE["chrom_sizes"]),
+        str(REFERENCE["blacklist_bed"]),
+        str(REFERENCE["tss_bed"]),
+        str(REFERENCE["autosomes_file"]),
+    ]
+)
+
+FINAL_TARGETS = (
+    REFERENCE_TARGETS
+    + list(FINAL_BAMS.values())
+    + list(FINAL_BAIS.values())
+    + list(BIGWIGS.values())
+    + list(ATAC_SHIFTED_BIGWIGS.values())
+    + list(PEAKS.values())
+    + CALLPEAK_BEDGRAPHS
+    + list(FRIP_TSV.values())
+    + list(TSS_PLOTS.values())
+    + list(FRAGMENT_HISTOGRAMS.values())
+    + list(FINGERPRINTS.values())
+    + list(CROSSCORRELATION.values())
+    + [METRICS_TSV, METRICS_JSON, MULTIQC_REPORT, RESOLVED_CONFIG]
+)
+
+
+include: "rules/common.smk"
+
+
+rule all:
+    input:
+        FINAL_TARGETS
+
+
+include: "rules/reference.smk"
+include: "rules/read_processing.smk"
+include: "rules/alignment.smk"
+include: "rules/peaks.smk"
+include: "rules/qc.smk"

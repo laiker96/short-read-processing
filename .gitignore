@@ -1,0 +1,39 @@
+# Local environments and caches
+.venv/
+.snakemake/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Runtime logs, intermediate files, and results
+logs/
+results/
+work/
+
+# Downloaded and generated reference/data assets
+data/raw/
+references/
+*.sra
+*.aria2
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.bam
+*.bai
+*.cram
+*.crai
+*.bt2
+*.bt2l
+*.bw
+*.bigWig
+*.bedGraph
+*.bedgraph
+*.bdg
+
+# Keep deterministic small FASTQ fixtures; ignore their generated indexes.
+!tests/fixtures/**/*.fastq
+!tests/fixtures/**/*.fastq.gz
+tests/fixtures/workflow/index/
+tests/fixtures/workflow/*.fai
+tests/fixtures/workflow/*.chrom.sizes

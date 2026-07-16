@@ -1,0 +1,15 @@
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11
+  - snakemake-minimal=9.23.1
+  - pyyaml=6.0.3
+  - pandas=3.0.3
+  - jsonschema=4.26.0
+  - pytest=9.1.1
+  - graphviz=13.1.2
+  - aria2=1.37.0
+  - sra-tools=3.4.1
+  - pigz=2.8

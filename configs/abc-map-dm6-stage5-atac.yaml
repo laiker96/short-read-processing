@@ -1,0 +1,102 @@
+project: abc-map-dm6-stage5-atac
+run_id: baseline
+output_dir: results
+assay: atac
+reference:
+  name: dm6
+  fasta: references/dm6/dm6.fa
+  bowtie2_index: references/dm6/bowtie2/dm6
+  chrom_sizes: references/dm6/dm6.chrom.sizes
+  blacklist_bed: references/dm6/dm6.blacklist.bed
+  tss_bed: references/dm6/dm6.tss.bed
+  autosomes_file: references/dm6/dm6.autosomes.txt
+  mitochondrial_contig: chrM
+  effective_genome_size: 142573017
+  macs3_genome_size: dm
+  preparation:
+    mode: download
+    fasta:
+      url: https://hgdownload.soe.ucsc.edu/goldenPath/dm6/bigZips/dm6.fa.gz
+      checksum: md5:4a5777324403eff92c3650c30af30120
+    annotation:
+      url: https://hgdownload.soe.ucsc.edu/goldenPath/dm6/bigZips/genes/dm6.ncbiRefSeq.gtf.gz
+      checksum: md5:17fa021bf9cf35a12703787cc18ea4c8
+    blacklist:
+      url: https://raw.githubusercontent.com/Boyle-Lab/Blacklist/v2.0/lists/dm6-blacklist.v2.bed.gz
+      checksum: sha256:6174aa0304859a2ee836de7f1eaabc4e7ab7fc4c75ffd4b7587172b1e234026e
+    autosomes:
+    - chr2L
+    - chr2R
+    - chr3L
+    - chr3R
+    - chr4
+samples:
+- id: embryo_stage5_atac_rep1
+  accessions:
+  - ERR3975804
+  - ERR3975777
+  replicate: 1
+  role: treatment
+  layout: paired
+  r1:
+  - data/raw/random_two/ERR3975777/ERR3975777_1.fastq.gz
+  - data/raw/random_two/ERR3975804/ERR3975804_1.fastq.gz
+  parameters:
+    trimming:
+      adapter_preset: nextera
+      adapter_fasta: null
+      quality_cutoff: 20
+      minimum_length: 20
+      error_rate: 0.1
+      minimum_overlap: 3
+    alignment:
+      preset: very-sensitive
+      maximum_fragment_length: 2000
+      mapq_minimum: 30
+    filtering:
+      remove_duplicates: true
+      remove_mitochondrial: true
+  r2:
+  - data/raw/random_two/ERR3975777/ERR3975777_2.fastq.gz
+  - data/raw/random_two/ERR3975804/ERR3975804_2.fastq.gz
+  peak_caller:
+    command: hmmratac
+    lower: 10
+    upper: 20
+    prescan_cutoff: 1.2
+- id: embryo_stage5_atac_rep2
+  accessions:
+  - ERR3975789
+  replicate: 2
+  role: treatment
+  layout: paired
+  r1:
+  - data/raw/random_two/ERR3975789/ERR3975789_1.fastq.gz
+  parameters:
+    trimming:
+      adapter_preset: nextera
+      adapter_fasta: null
+      quality_cutoff: 20
+      minimum_length: 20
+      error_rate: 0.1
+      minimum_overlap: 3
+    alignment:
+      preset: very-sensitive
+      maximum_fragment_length: 2000
+      mapq_minimum: 30
+    filtering:
+      remove_duplicates: true
+      remove_mitochondrial: true
+  r2:
+  - data/raw/random_two/ERR3975789/ERR3975789_2.fastq.gz
+  peak_caller:
+    command: hmmratac
+    lower: 10
+    upper: 20
+    prescan_cutoff: 1.2
+provenance:
+  generated_at_utc: '2026-07-15T15:39:44.774373+00:00'
+  input_mode: accession_sample_sheet
+  sample_sheet: resources/abc_map_dm6_stage5_atac.sample_sheet.tsv
+  sample_sheet_schema: schemas/sample-sheet.schema.yaml
+  download_manifest: data/raw/random_two/download_manifest.tsv

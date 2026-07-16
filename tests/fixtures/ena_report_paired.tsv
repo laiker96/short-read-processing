@@ -1,0 +1,3 @@
+run_accession	experiment_accession	library_layout	fastq_ftp	fastq_md5	fastq_bytes
+SRR123456	SRX123456	PAIRED	ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/006/SRR123456/SRR123456_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/006/SRR123456/SRR123456_2.fastq.gz	11111111111111111111111111111111;22222222222222222222222222222222	100;200
+

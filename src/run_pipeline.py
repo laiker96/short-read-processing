@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Run accession sample sheet -> FASTQs -> resolved YAML -> Snakemake outputs."""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from short_read_processing.cli import add_download_arguments, cli_main, execute_download
+from short_read_processing.configuration import generate_configs
+from short_read_processing.sample_sheet import DEFAULT_SCHEMA, sample_sheet_accessions
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("sample_sheet", type=Path, help="Canonical accession CSV/TSV")
+    parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
+    parser.add_argument("--project", default="short-read")
+    parser.add_argument("--run-id", default="baseline")
+    parser.add_argument("--config-dir", type=Path, default=Path("configs"))
+    parser.add_argument("--reference-root", type=Path, default=Path("references"))
+    parser.add_argument("--snakefile", type=Path, default=REPO_ROOT / "workflow" / "Snakefile")
+    parser.add_argument(
+        "--workflow-profile",
+        type=Path,
+        default=REPO_ROOT / "profiles" / "local",
+    )
+    parser.add_argument("--cores", type=int, help="Override profile core count")
+    parser.add_argument("--skip-download", action="store_true", help="Reuse --manifest")
+    parser.add_argument("--download-only", action="store_true")
+    parser.add_argument("--config-only", action="store_true")
+    parser.add_argument("--snakemake-dry-run", action="store_true")
+    parser.add_argument(
+        "--snakemake-arg",
+        action="append",
+        default=[],
+        help="Additional single Snakemake argument; repeat as needed",
+    )
+    add_download_arguments(parser)
+    args = parser.parse_args()
+    if args.cores is not None and args.cores < 1:
+        parser.error("--cores must be positive")
+    if args.download_only and args.config_only:
+        parser.error("--download-only and --config-only are mutually exclusive")
+
+    sample_sheet = args.sample_sheet.resolve()
+    accessions = sample_sheet_accessions(sample_sheet, schema_path=args.schema.resolve())
+    manifest = (args.manifest or args.output_dir / "download_manifest.tsv").resolve()
+    if args.skip_download:
+        if not manifest.is_file():
+            raise FileNotFoundError(f"Manifest does not exist: {manifest}")
+        print(f"Reusing download manifest: {manifest}")
+    else:
+        manifest = execute_download(accessions, args)
+        if args.dry_run:
+            print("Download dry-run complete; processing was not started")
+            return 0
+    if args.download_only:
+        return 0
+
+    configs = generate_configs(
+        manifest_path=manifest,
+        sample_sheet_path=sample_sheet,
+        output_dir=args.config_dir.resolve(),
+        project=args.project,
+        run_id=args.run_id,
+        reference_root=args.reference_root,
+        path_base=REPO_ROOT,
+        require_fastq_files=True,
+        schema_path=args.schema.resolve(),
+    )
+    for config_path in configs:
+        print(f"Resolved workflow config: {config_path}")
+    if args.config_only:
+        return 0
+
+    snakemake = shutil.which("snakemake") or str(Path(sys.executable).with_name("snakemake"))
+    if not Path(snakemake).is_file() and not shutil.which(snakemake):
+        raise FileNotFoundError("snakemake is not available in PATH")
+    for config_path in configs:
+        command = [
+            snakemake,
+            "--snakefile",
+            str(args.snakefile.resolve()),
+            "--configfile",
+            str(config_path),
+            "--workflow-profile",
+            str(args.workflow_profile.resolve()),
+        ]
+        if args.cores is not None:
+            command.extend(["--cores", str(args.cores)])
+        if args.snakemake_dry_run:
+            command.append("--dry-run")
+        command.extend(args.snakemake_arg)
+        print("Running: " + " ".join(command))
+        subprocess.run(command, cwd=REPO_ROOT, check=True)
+    return 0
+
+
+if __name__ == "__main__":
+    cli_main(main)

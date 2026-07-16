@@ -1,0 +1,170 @@
+schema_version: 1
+name: short-read-processing sample sheet
+row_model: One row is one public run or experiment accession. Rows with the same sample_id are technical runs of one biological library.
+formats:
+  - tsv
+  - csv
+allow_extra_columns: true
+
+required_columns:
+  - accession
+  - sample_id
+  - assay
+  - genome
+  - role
+  - control_id
+  - replicate
+  - peak_caller
+
+fields:
+  accession:
+    type: accession
+    pattern: '^(SRR|SRX|ERR|ERX)[0-9]+$'
+    description: Public run or experiment accession. Experiment accessions expand to all runs.
+  sample_id:
+    type: string
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    description: Biological library ID. Repeat it to merge technical runs before alignment.
+  assay:
+    type: enum
+    values: [atac, chip_tf, chip_histone]
+  genome:
+    type: enum
+    values: [dm6, hg38]
+  role:
+    type: enum
+    values: [treatment, control]
+    default: treatment
+  control_id:
+    type: string
+    allow_blank: true
+    description: sample_id of the matched ChIP input/control; blank for ATAC and control rows.
+  replicate:
+    type: integer
+    minimum: 1
+    default: 1
+  peak_caller:
+    type: enum
+    values: [hmmratac, callpeak]
+    allow_blank: true
+    defaults_by_assay:
+      atac: hmmratac
+      chip_tf: callpeak
+      chip_histone: callpeak
+
+  macs3_format:
+    type: enum
+    values: [AUTO, BAM, BAMPE]
+    allow_blank: true
+    default: AUTO
+  macs3_qvalue:
+    type: number
+    exclusive_minimum: 0
+    maximum: 1
+    allow_blank: true
+    default: 0.01
+  macs3_broad:
+    type: boolean
+    allow_blank: true
+    defaults_by_assay:
+      atac: false
+      chip_tf: false
+      chip_histone: true
+  macs3_broad_cutoff:
+    type: number
+    exclusive_minimum: 0
+    maximum: 1
+    allow_blank: true
+    default: 0.1
+  macs3_nomodel:
+    type: boolean
+    allow_blank: true
+    default: false
+  macs3_shift:
+    type: integer
+    allow_blank: true
+  macs3_extsize:
+    type: integer
+    minimum: 1
+    allow_blank: true
+
+  hmmratac_lower:
+    type: number
+    minimum: 0
+    allow_blank: true
+    default: 10
+  hmmratac_upper:
+    type: number
+    minimum: 0
+    allow_blank: true
+    default: 20
+  hmmratac_prescan_cutoff:
+    type: number
+    minimum: 0
+    allow_blank: true
+    default: 1.2
+
+  adapter_preset:
+    type: enum
+    values: [nextera, truseq, custom]
+    allow_blank: true
+    defaults_by_assay:
+      atac: nextera
+      chip_tf: truseq
+      chip_histone: truseq
+  adapter_fasta:
+    type: string
+    allow_blank: true
+  trim_quality_cutoff:
+    type: integer
+    minimum: 0
+    maximum: 50
+    allow_blank: true
+    default: 20
+  trim_minimum_length:
+    type: integer
+    minimum: 1
+    allow_blank: true
+    default: 20
+  bowtie2_preset:
+    type: enum
+    values: [sensitive, very-sensitive, sensitive-local, very-sensitive-local]
+    allow_blank: true
+    default: very-sensitive
+  maximum_fragment_length:
+    type: integer
+    minimum: 1
+    allow_blank: true
+    default: 2000
+  mapq_minimum:
+    type: integer
+    minimum: 0
+    maximum: 255
+    allow_blank: true
+    default: 30
+  remove_duplicates:
+    type: boolean
+    allow_blank: true
+    default: true
+  remove_mitochondrial:
+    type: boolean
+    allow_blank: true
+    default: true
+  notes:
+    type: string
+    allow_blank: true
+
+cross_field_rules:
+  - Each accession must appear exactly once in the sheet.
+  - ATAC rows must have role=treatment and a blank control_id.
+  - ChIP treatment rows must name an existing role=control sample_id in control_id.
+  - ChIP control rows must have a blank control_id.
+  - HMMRATAC is valid only for paired-end ATAC after accession resolution.
+  - MACS3-only columns must be blank when peak_caller=hmmratac.
+  - macs3_shift or macs3_extsize requires macs3_format=BAM and resolves macs3_nomodel=true.
+  - All rows sharing sample_id must have identical biological and processing fields.
+
+resolved_callpeak_outputs:
+  flags: [-B, --SPMR]
+  treatment_bedgraph: '{sample_id}_treat_pileup.bdg'
+  control_bedgraph: '{sample_id}_control_lambda.bdg'
