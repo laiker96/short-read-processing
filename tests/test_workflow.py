@@ -34,7 +34,10 @@ def _callpeak(*, broad=False):
     return config
 
 
-@pytest.mark.parametrize("branch", ["atac_hmmratac", "atac_se", "chip_tf", "chip_histone"])
+@pytest.mark.parametrize(
+    "branch",
+    ["atac_hmmratac", "atac_se", "chip_tf", "chip_histone", "chip_histone_ip_only"],
+)
 def test_workflow_branches_dry_run(tmp_path, branch):
     config = copy.deepcopy(BASE_CONFIG)
     config["output_dir"] = str(tmp_path / "results")
@@ -52,16 +55,18 @@ def test_workflow_branches_dry_run(tmp_path, branch):
         treatment["peak_caller"] = _callpeak()
         treatment["peak_caller"]["format"] = "BAM"
     else:
-        config["assay"] = branch
-        treatment["peak_caller"] = _callpeak(broad=branch == "chip_histone")
-        treatment["control"] = "input_rep1"
-        control = copy.deepcopy(treatment)
-        control["id"] = "input_rep1"
-        control["accessions"] = ["SRR123457"]
-        control["role"] = "control"
-        control.pop("control")
-        control.pop("peak_caller")
-        config["samples"].append(control)
+        assay = "chip_histone" if branch == "chip_histone_ip_only" else branch
+        config["assay"] = assay
+        treatment["peak_caller"] = _callpeak(broad=assay == "chip_histone")
+        if branch != "chip_histone_ip_only":
+            treatment["control"] = "input_rep1"
+            control = copy.deepcopy(treatment)
+            control["id"] = "input_rep1"
+            control["accessions"] = ["SRR123457"]
+            control["role"] = "control"
+            control.pop("control")
+            control.pop("peak_caller")
+            config["samples"].append(control)
 
     config_path = tmp_path / f"{branch}.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
@@ -78,14 +83,19 @@ def test_workflow_branches_dry_run(tmp_path, branch):
             "--cores",
             "2",
             "--dry-run",
-            "--quiet",
         ],
         cwd=REPO_ROOT,
         env=environment,
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    if branch == "atac_hmmratac":
+        assert "atac_rep1_accessible_regions.narrowPeak" in output
+    if branch == "chip_histone_ip_only":
+        assert "callpeak_broad" in output
+        assert "chip_fingerprint" not in output
 
 
 def test_technical_lanes_align_separately_then_merge(tmp_path):
@@ -128,6 +138,50 @@ def test_workflow_config_rejects_callpeak_without_bedgraphs():
     config["samples"][0]["peak_caller"]["write_bedgraph"] = False
     with pytest.raises(AcquisitionError, match="must write -B --SPMR"):
         validate_workflow_config(config)
+
+
+def test_secondary_macs3_dry_run_reuses_primary_bam(tmp_path):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["output_dir"] = str(tmp_path / "results")
+    source_bam = (
+        Path(config["output_dir"])
+        / config["project"]
+        / config["run_id"]
+        / "bam"
+        / "atac_rep1.final.bam"
+    )
+    source_bam.parent.mkdir(parents=True)
+    source_bam.touch()
+    source_bam.with_suffix(source_bam.suffix + ".bai").touch()
+    config_path = tmp_path / "secondary-macs3.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+    snakemake = Path(sys.executable).with_name("snakemake")
+    environment = os.environ.copy()
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [
+            str(snakemake),
+            "--snakefile",
+            "workflow/secondary_macs3.smk",
+            "--configfile",
+            str(config_path),
+            "--cores",
+            "2",
+            "--dry-run",
+            "--config",
+            "secondary_macs3_run_id=macs3-test",
+            "secondary_macs3_shift=-75",
+            "secondary_macs3_extsize=150",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert re.search(r"secondary_callpeak\s+1", output)
 
 
 def test_auto_reference_preparation_dry_run(tmp_path):

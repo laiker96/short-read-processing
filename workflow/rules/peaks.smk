@@ -53,7 +53,7 @@ rule hmmratac:
         bam=lambda wc: FINAL_BAMS[wc.sample],
         blacklist=str(REFERENCE["blacklist_bed"])
     output:
-        peaks=f"{RESULT_ROOT}/peaks/{{sample}}/{{sample}}_peaks.narrowPeak"
+        peaks=f"{RESULT_ROOT}/peaks/{{sample}}/{{sample}}_accessible_regions.narrowPeak"
     params:
         lower=lambda wc: SAMPLES[wc.sample]["peak_caller"]["lower"],
         upper=lambda wc: SAMPLES[wc.sample]["peak_caller"]["upper"],

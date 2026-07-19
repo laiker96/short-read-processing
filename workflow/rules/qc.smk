@@ -171,7 +171,7 @@ rule chip_fingerprint:
     params:
         control_label=lambda wc: SAMPLES[wc.sample]["control"]
     wildcard_constraints:
-        sample=CHIP_TREATMENT_RE
+        sample=CHIP_CONTROLLED_TREATMENT_RE
     threads: 4
     resources:
         mem_mb=6000

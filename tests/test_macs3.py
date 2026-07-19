@@ -35,3 +35,30 @@ def test_callpeak_argv_and_bedgraph_outputs():
         Path("peaks/atac_rep1_treat_pileup.bdg"),
         Path("peaks/atac_rep1_control_lambda.bdg"),
     )
+
+
+def test_broad_callpeak_omits_external_control_when_ip_only():
+    config = {
+        "command": "callpeak",
+        "format": "BAMPE",
+        "qvalue": 0.01,
+        "broad": True,
+        "broad_cutoff": 0.1,
+        "nomodel": False,
+        "shift": None,
+        "extsize": None,
+        "write_bedgraph": True,
+        "spmr": True,
+    }
+    arguments = callpeak_arguments(
+        config,
+        treatment_bam=Path("h3k27ac.bam"),
+        control_bam=None,
+        name="h3k27ac_rep1",
+        genome_size="dm",
+        output_dir=Path("peaks"),
+    )
+
+    assert "-c" not in arguments
+    assert "--broad" in arguments
+    assert arguments[arguments.index("--broad-cutoff") + 1] == "0.1"

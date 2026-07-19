@@ -103,6 +103,38 @@ repository-local Mamba environment command after pulling this change. The
 cluster nodes must see the repository, inputs, results, and `.snakemake/conda`
 through the same shared filesystem paths.
 
+`slurm/install_environment.sbatch` installs the orchestration environment at
+`$HOME/short-read-processing/.venv`; `slurm/run_atlas_atac.sbatch` processes all
+23 selected accessions in `resources/atlas_atac_selected.sample_sheet.tsv`
+inside one 24-core compute allocation. Both scripts refuse to run on a host
+named `cranex*`. The ATAC job reuses the staged, checksum-verified manifest and
+does not perform network downloads. On an offline cluster, stage the Micromamba
+package cache under `.cluster-bootstrap/root/pkgs`, packed rule environments
+under `.cluster-bootstrap/conda-envs`, FASTQs under `data/raw/atlas_atac`, and
+the prepared dm6 assets under `references/dm6` before submission.
+
+`slurm/download_and_run_atlas_atac_dual.sbatch` is the direct-download variant.
+Inside one compute allocation it installs the repo-local environment when
+needed, downloads and checksum-verifies all selected ENA FASTQs, runs the
+primary HMMRATAC workflow, and then runs MACS3 `callpeak` with `-f BAM
+--nomodel --shift -75 --extsize 150 -B --SPMR` from the already-produced final
+BAMs. MACS3 outputs are isolated below
+`results/atlas-atac-dm6/macs3-shift-neg75-extsize-150/`; alignment is not run a
+second time. The job is safe to resubmit: aria2 resumes managed partial files,
+untracked size-mismatched partial copies are restarted, the manifest is written
+atomically, and Snakemake reruns incomplete jobs. It also refuses `cranex*`,
+checks compute-node ENA DNS before downloading, and uses a lock to prevent two
+jobs from writing the same dataset concurrently. It also raises the per-process
+open-file soft limit to 65,536 (or the cluster hard limit) so deepTools can
+concatenate temporary ATAC-shift BAM chunks for the 1,870-contig dm6 assembly.
+`slurm/download_and_run_atlas_h3k27ac_ip_only.sbatch` applies the same
+restart-safe direct-download pattern to the 15 selected H3K27ac IP-only runs,
+using broad MACS3 defaults without external input controls.
+From a networked workstation, `slurm/stage_and_submit_atlas.sh` waits for the
+completed local manifest, verifies a full dry-run, stages those assets, selects
+an idle CPU node with at least 24 CPUs and 24 GiB RAM, and submits the install
+and dependent processing jobs. Override `REMOTE` or `REMOTE_ROOT` when needed.
+
 For generated `dm6` and `hg38` configs, reference preparation is part of the
 Snakemake DAG. The workflow downloads checksum-pinned UCSC FASTA and NCBI
 RefSeq GTF archives plus the ENCODE v2 blacklist, then creates:
@@ -212,7 +244,9 @@ mamba run --prefix "$PWD/.venv" \
 The stable `data/raw/download_manifest.tsv` records requested accessions,
 expanded runs, layouts, backends, local FASTQs, and checksums. Repeated commands
 update matching rows rather than discarding unrelated manifest entries. Raw
-files are stored as `data/raw/<run accession>/*.fastq.gz`.
+files are stored as `data/raw/<run accession>/*.fastq.gz`. FASTQ paths below the
+manifest directory are stored relatively and resolved against that directory
+when read, so the directory can be moved to another host without path edits.
 
 Force `--backend ena` to disallow conversion fallbacks or `--backend sra` to
 force SRA Toolkit. `--file-jobs` controls simultaneous FASTQ files,
@@ -253,11 +287,13 @@ declare both MACS3 bedGraph products: treatment pileup and control lambda.
 Other defaults include Nextera adapters for ATAC, TruSeq for ChIP, Bowtie2
 `very-sensitive`, MAPQ 30, and duplicate and mitochondrial filtering.
 
-ChIP rows mark input libraries with `role=control`; each treatment names the
-matched control's `sample_id` in `control_id`. Missing or cross-assay controls
-fail sample-sheet validation. Generated reference paths and their pinned
-preparation sources are placed below `references/dm6` or `references/hg38`;
-they do not need to exist beforehand.
+ChIP input libraries use `role=control`; a treatment names its matched
+control's `sample_id` in `control_id`. IP-only ChIP is supported by leaving
+`control_id` blank; MACS3 then runs without `-c` and control-dependent
+fingerprint QC is omitted. Invalid or cross-assay control references fail
+sample-sheet validation. Generated reference paths and their pinned preparation
+sources are placed below `references/dm6` or `references/hg38`; they do not need
+to exist beforehand.
 
 ## Tests
 

@@ -38,7 +38,7 @@ fields:
   control_id:
     type: string
     allow_blank: true
-    description: sample_id of the matched ChIP input/control; blank for ATAC and control rows.
+    description: Optional sample_id of the matched ChIP input/control; blank for IP-only ChIP, ATAC, and control rows.
   replicate:
     type: integer
     minimum: 1
@@ -157,7 +157,7 @@ fields:
 cross_field_rules:
   - Each accession must appear exactly once in the sheet.
   - ATAC rows must have role=treatment and a blank control_id.
-  - ChIP treatment rows must name an existing role=control sample_id in control_id.
+  - A nonblank ChIP treatment control_id must name an existing role=control sample_id.
   - ChIP control rows must have a blank control_id.
   - HMMRATAC is valid only for paired-end ATAC after accession resolution.
   - MACS3-only columns must be blank when peak_caller=hmmratac.

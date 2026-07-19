@@ -124,7 +124,7 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
 
         if config["assay"].startswith("chip") and sample["role"] == "treatment":
             control = str(sample.get("control") or "")
-            if role_by_id.get(control) != "control":
+            if control and role_by_id.get(control) != "control":
                 raise AcquisitionError(f"Sample {sample_id}: invalid matched ChIP control")
         if config["assay"] == "atac" and sample["role"] != "treatment":
             raise AcquisitionError("ATAC configurations cannot contain control samples")

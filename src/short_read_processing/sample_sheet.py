@@ -226,9 +226,7 @@ def _validate_relationships(rows: list[dict[str, Any]], canonical_fields: set[st
             )
         if assay.startswith("chip") and role == "control" and control_id:
             raise AcquisitionError(f"Line {line}: ChIP control rows must have blank control_id")
-        if assay.startswith("chip") and role == "treatment":
-            if not control_id:
-                raise AcquisitionError(f"Line {line}: ChIP treatment requires control_id")
+        if assay.startswith("chip") and role == "treatment" and control_id:
             if role_by_sample.get(str(control_id)) != "control":
                 raise AcquisitionError(
                     f"Line {line}: control_id {control_id!r} does not name a control sample"

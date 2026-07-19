@@ -36,3 +36,26 @@ recommended biological replicate as replicate 2.
 `alternative_GSE140539_stage5_with_inputs` option from
 `../ABC-map-dm6/metadata/h3k27ac_replicates_inputs_metadata.tsv`: two H3K27ac
 IP replicates with their replicate-specific input controls.
+
+`atlas_atac_selected.sample_sheet.tsv` is generated from every row with
+`atlas_use=yes` and `selection_status=selected` in
+`atlas_atac_seq_metadata.tsv`. It contains 23 run accessions representing 22
+biological libraries; the two E5 replicate-1 runs remain technical replicates
+under one `sample_id`. Regenerate it deterministically with:
+
+```bash
+python src/write_atlas_atac_sample_sheet.py \
+  resources/atlas_atac_seq_metadata.tsv \
+  --output resources/atlas_atac_selected.sample_sheet.tsv
+```
+
+`atlas_h3k27ac_ip_only.sample_sheet.tsv` contains the 15 selected H3K27ac IP
+runs from `atlas_h3k27ac_metadata_ip_only.tsv`. Controls are intentionally
+absent, so MACS3 runs without `-c` and uses the `chip_histone` broad-peak
+defaults. Regenerate it deterministically with:
+
+```bash
+python src/write_atlas_h3k27ac_sample_sheet.py \
+  resources/atlas_h3k27ac_metadata_ip_only.tsv \
+  --output resources/atlas_h3k27ac_ip_only.sample_sheet.tsv
+```

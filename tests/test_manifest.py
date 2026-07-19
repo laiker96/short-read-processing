@@ -31,3 +31,26 @@ def test_dry_run_does_not_downgrade_completed_manifest(tmp_path):
     )
     write_manifest(manifest, [planned])
     assert read_manifest(manifest)[0]["status"] == "downloaded"
+
+
+def test_manifest_paths_are_portable_relative_to_manifest(tmp_path):
+    raw = tmp_path / "raw"
+    fastq = raw / "SRR123" / "SRR123.fastq.gz"
+    fastq.parent.mkdir(parents=True)
+    fastq.write_bytes(b"fastq")
+    plan = RunPlan(
+        requested_accession="SRR123",
+        experiment_accession="SRX123",
+        run_accession="SRR123",
+        library_layout="SINGLE",
+        backend="ena",
+        run_dir=fastq.parent,
+        files=[FilePlan("https://example/fastq", "abc", 5, fastq, "r1")],
+        status="downloaded",
+    )
+    manifest = raw / "download_manifest.tsv"
+
+    write_manifest(manifest, [plan])
+
+    assert "SRR123/SRR123.fastq.gz" in manifest.read_text()
+    assert read_manifest(manifest)[0]["fastq_1"] == str(fastq)

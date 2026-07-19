@@ -59,6 +59,35 @@ def _aria2_input(files: Iterable[FilePlan]) -> str:
     return "\n".join(blocks) + "\n"
 
 
+def _discard_untracked_partial_files(files: Iterable[FilePlan]) -> list[Path]:
+    """Remove size-mismatched files that aria2 cannot safely resume.
+
+    Aria2 writes a sibling ``.aria2`` control file for its own partial
+    downloads. A partial file copied by another tool (for example, an
+    interrupted rsync) has no segment map and must be restarted from byte zero.
+    Complete-size files are left for aria2's checksum verification.
+    """
+
+    discarded: list[Path] = []
+    for item in files:
+        control = item.path.with_name(item.path.name + ".aria2")
+        if (
+            item.path.is_file()
+            and not control.exists()
+            and item.size_bytes is not None
+            and item.path.stat().st_size != item.size_bytes
+        ):
+            size = item.path.stat().st_size
+            item.path.unlink()
+            discarded.append(item.path)
+            print(
+                f"Restarting untracked partial FASTQ {item.path} "
+                f"({size} of {item.size_bytes} bytes)",
+                flush=True,
+            )
+    return discarded
+
+
 def download_ena(plans: list[RunPlan], options: DownloadOptions) -> None:
     if not plans:
         return
@@ -67,6 +96,7 @@ def download_ena(plans: list[RunPlan], options: DownloadOptions) -> None:
     if not files:
         raise AcquisitionError("ENA download was selected but no FASTQ files were resolved")
 
+    _discard_untracked_partial_files(files)
     input_text = _aria2_input(files)
     output_root = Path(os.path.commonpath([str(plan.run_dir.parent) for plan in plans]))
     output_root.mkdir(parents=True, exist_ok=True)
@@ -221,4 +251,3 @@ def download_plans(plans: list[RunPlan], options: DownloadOptions) -> None:
 
     download_ena([plan for plan in plans if plan.backend == "ena"], options)
     download_sra([plan for plan in plans if plan.backend == "sra"], options)
-

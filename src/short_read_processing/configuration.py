@@ -294,11 +294,12 @@ def generate_configs(
                 sample["peak_caller"] = item["peak_caller"]
             if assay.startswith("chip") and item["role"] == "treatment":
                 control_id = str(item["control"] or "")
-                if control_id not in sample_ids or role_by_id.get(control_id) != "control":
-                    raise AcquisitionError(
-                        f"ChIP treatment {item['id']} lacks a valid matched control in its group"
-                    )
-                sample["control"] = control_id
+                if control_id:
+                    if control_id not in sample_ids or role_by_id.get(control_id) != "control":
+                        raise AcquisitionError(
+                            f"ChIP treatment {item['id']} has an invalid matched control"
+                        )
+                    sample["control"] = control_id
             samples.append(sample)
 
         group_project = project if len(groups) == 1 else f"{project}.{assay}.{genome}"

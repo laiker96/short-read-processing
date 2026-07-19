@@ -1,6 +1,11 @@
 # Local environments and caches
 .venv/
+.micromamba/
+.cluster-bootstrap/
 .snakemake/
+.cache/
+.atlas-atac-dual.lock
+.atlas-h3k27ac.lock
 .pytest_cache/
 __pycache__/
 *.py[cod]

@@ -25,6 +25,7 @@ MANIFEST_FIELDS = (
     "md5_2",
     "extra_md5s",
 )
+PATH_FIELDS = ("fastq_1", "fastq_2")
 
 
 def _one(files: list[FilePlan], mate: str) -> FilePlan | None:
@@ -51,6 +52,47 @@ def plan_to_row(plan: RunPlan) -> dict[str, str]:
     }
 
 
+def _resolve_manifest_path(value: str, base: Path) -> str:
+    if not value:
+        return ""
+    path = Path(value)
+    return str(path if path.is_absolute() else (base / path).resolve())
+
+
+def _resolve_manifest_paths(row: dict[str, str], base: Path) -> dict[str, str]:
+    resolved = dict(row)
+    for field in PATH_FIELDS:
+        resolved[field] = _resolve_manifest_path(resolved[field], base)
+    resolved["extra_fastqs"] = ";".join(
+        _resolve_manifest_path(value, base)
+        for value in resolved["extra_fastqs"].split(";")
+        if value
+    )
+    return resolved
+
+
+def _portable_manifest_path(value: str, base: Path) -> str:
+    if not value:
+        return ""
+    path = Path(value).resolve()
+    try:
+        return path.relative_to(base).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _portable_manifest_paths(row: dict[str, str], base: Path) -> dict[str, str]:
+    portable = dict(row)
+    for field in PATH_FIELDS:
+        portable[field] = _portable_manifest_path(portable[field], base)
+    portable["extra_fastqs"] = ";".join(
+        _portable_manifest_path(value, base)
+        for value in portable["extra_fastqs"].split(";")
+        if value
+    )
+    return portable
+
+
 def read_manifest(path: Path) -> list[dict[str, str]]:
     if not path.is_file():
         raise FileNotFoundError(f"Manifest not found: {path}")
@@ -59,7 +101,7 @@ def read_manifest(path: Path) -> list[dict[str, str]]:
         missing = set(MANIFEST_FIELDS) - set(reader.fieldnames or [])
         if missing:
             raise ValueError(f"Manifest {path} is missing columns: {', '.join(sorted(missing))}")
-        return list(reader)
+        return [_resolve_manifest_paths(row, path.resolve().parent) for row in reader]
 
 
 def write_manifest(path: Path, plans: Iterable[RunPlan], *, merge: bool = True) -> None:
@@ -79,7 +121,11 @@ def write_manifest(path: Path, plans: Iterable[RunPlan], *, merge: bool = True) 
             continue
         rows_by_key[key] = row
 
-    rows = sorted(rows_by_key.values(), key=lambda row: (row["requested_accession"], row["run_accession"]))
+    rows = sorted(
+        rows_by_key.values(),
+        key=lambda row: (row["requested_accession"], row["run_accession"]),
+    )
+    rows = [_portable_manifest_paths(row, path.parent) for row in rows]
     temporary_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -91,7 +137,12 @@ def write_manifest(path: Path, plans: Iterable[RunPlan], *, merge: bool = True) 
             delete=False,
         ) as handle:
             temporary_name = handle.name
-            writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS, delimiter="\t", lineterminator="\n")
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=MANIFEST_FIELDS,
+                delimiter="\t",
+                lineterminator="\n",
+            )
             writer.writeheader()
             writer.writerows(rows)
         os.replace(temporary_name, path)

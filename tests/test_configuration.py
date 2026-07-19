@@ -124,6 +124,22 @@ def test_histone_callpeak_is_broad_and_resolves_control(tmp_path):
     assert "peak_caller" not in config["samples"][1]
 
 
+def test_histone_callpeak_can_run_without_control(tmp_path):
+    plan = _run_plan(tmp_path / "raw", "SRR100001", "SRR100001")
+    sheet = (
+        HEADER
+        + "\nSRR100001\tH3K27ac_rep1\tchip_histone\tdm6\ttreatment\t\t1\tcallpeak\n"
+    )
+    output = _generate(tmp_path, [plan], sheet)[0]
+    treatment = yaml.safe_load(output.read_text())["samples"][0]
+
+    assert "control" not in treatment
+    assert treatment["peak_caller"]["format"] == "BAMPE"
+    assert treatment["peak_caller"]["broad"] is True
+    assert treatment["peak_caller"]["broad_cutoff"] == 0.1
+    assert treatment["parameters"]["trimming"]["adapter_preset"] == "truseq"
+
+
 def test_hmmratac_default_rejects_single_end_atac(tmp_path):
     plan = _run_plan(tmp_path / "raw", "SRR100001", "SRR100001", layout="SINGLE")
     sheet = HEADER + "\nSRR100001\tatac_rep1\tatac\tdm6\ttreatment\t\t1\t\n"

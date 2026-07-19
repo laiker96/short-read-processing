@@ -29,11 +29,15 @@ SAMPLES = {str(sample["id"]): sample for sample in config["samples"]}
 SAMPLE_IDS = list(SAMPLES)
 TREATMENTS = [sample_id for sample_id in SAMPLE_IDS if SAMPLES[sample_id]["role"] == "treatment"]
 CHIP_TREATMENTS = TREATMENTS if ASSAY.startswith("chip") else []
+CHIP_CONTROLLED_TREATMENTS = [
+    sample for sample in CHIP_TREATMENTS if SAMPLES[sample].get("control")
+]
 ATAC_SAMPLES = SAMPLE_IDS if ASSAY == "atac" else []
 
 SAMPLE_RE = wildcard_regex(SAMPLE_IDS)
 ATAC_RE = wildcard_regex(ATAC_SAMPLES)
 CHIP_TREATMENT_RE = wildcard_regex(CHIP_TREATMENTS)
+CHIP_CONTROLLED_TREATMENT_RE = wildcard_regex(CHIP_CONTROLLED_TREATMENTS)
 
 LANES = {}
 RAW_FASTQ_BY_UNIT = {}
@@ -123,9 +127,13 @@ HMMRATAC_RE = wildcard_regex(HMMRATAC)
 
 PEAKS = {
     sample: (
-        f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.broadPeak"
-        if sample in CALLPEAK_BROAD
-        else f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.narrowPeak"
+        f"{RESULT_ROOT}/peaks/{sample}/{sample}_accessible_regions.narrowPeak"
+        if sample in HMMRATAC
+        else (
+            f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.broadPeak"
+            if sample in CALLPEAK_BROAD
+            else f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.narrowPeak"
+        )
     )
     for sample in TREATMENTS
 }
@@ -159,7 +167,8 @@ FRAGMENT_HISTOGRAMS = {
     sample: f"{RESULT_ROOT}/qc/fragments/{sample}.histogram.tsv" for sample in ATAC_SAMPLES
 }
 FINGERPRINTS = {
-    sample: f"{RESULT_ROOT}/qc/chip/{sample}.fingerprint.png" for sample in CHIP_TREATMENTS
+    sample: f"{RESULT_ROOT}/qc/chip/{sample}.fingerprint.png"
+    for sample in CHIP_CONTROLLED_TREATMENTS
 }
 CROSSCORRELATION = {
     sample: f"{RESULT_ROOT}/qc/chip/{sample}.cross_correlation.txt"
