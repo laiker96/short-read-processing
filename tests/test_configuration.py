@@ -77,6 +77,41 @@ def test_atac_defaults_to_hmmratac_and_groups_technical_runs(tmp_path):
     assert preparation["fasta"]["checksum"].startswith("md5:")
     assert preparation["annotation"]["url"].endswith("dm6.ncbiRefSeq.gtf.gz")
     assert preparation["autosomes"] == ["chr2L", "chr2R", "chr3L", "chr3R", "chr4"]
+    assert config["atac_refinement"] == {
+        "enabled": True,
+        "fragment_maximum": 150,
+        "macs3_qvalue": 0.1,
+        "macs3_shift": -75,
+        "macs3_extsize": 150,
+        "bigwig_bin_size": 10,
+        "minimum_mean_cpm": 2.0,
+        "merge_gap_bp": 1,
+        "minimum_length": 50,
+        "maximum_length": 400,
+    }
+
+
+def test_identical_config_generation_does_not_replace_file(tmp_path):
+    plan = _run_plan(tmp_path / "raw", "SRR123456", "SRR123456")
+    sheet = HEADER + "\nSRR123456\tatac_rep1\tatac\tdm6\ttreatment\t\t1\t\n"
+    output = _generate(tmp_path, [plan], sheet)[0]
+    original = output.read_bytes()
+    output.touch()
+    timestamp = output.stat().st_mtime_ns
+
+    regenerated = generate_configs(
+        manifest_path=tmp_path / "manifest.tsv",
+        sample_sheet_path=tmp_path / "samples.tsv",
+        output_dir=tmp_path / "configs",
+        project="test-project",
+        run_id="baseline",
+        reference_root=tmp_path / "references",
+        path_base=tmp_path,
+        require_fastq_files=True,
+    )[0]
+
+    assert regenerated.read_bytes() == original
+    assert regenerated.stat().st_mtime_ns == timestamp
 
 
 def test_atac_callpeak_shift_override_writes_bedgraphs(tmp_path):

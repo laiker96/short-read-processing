@@ -107,3 +107,28 @@ def callpeak_argv(wildcards):
         output_dir=Path(f"{RESULT_ROOT}/peaks/{sample}"),
     )
     return shlex.join(arguments)
+
+
+def atac_refinement_callpeak_argv(wildcards):
+    refinement = ATAC_REFINEMENT
+    peak_config = {
+        "command": "callpeak",
+        "format": "BAM",
+        "qvalue": refinement["macs3_qvalue"],
+        "broad": False,
+        "nomodel": True,
+        "shift": refinement["macs3_shift"],
+        "extsize": refinement["macs3_extsize"],
+        "write_bedgraph": True,
+        "spmr": True,
+    }
+    arguments = callpeak_arguments(
+        peak_config,
+        treatment_bam=Path(ATAC_SHORT_BAMS[wildcards.sample]),
+        control_bam=None,
+        name=wildcards.sample,
+        genome_size=REFERENCE["macs3_genome_size"],
+        output_dir=Path(f"{ATAC_REFINEMENT_ROOT}/macs3/{wildcards.sample}"),
+    )
+    arguments.extend(["--keep-dup", "all"])
+    return shlex.join(arguments)

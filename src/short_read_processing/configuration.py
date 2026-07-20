@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 import yaml
@@ -68,6 +70,19 @@ REFERENCE_SOURCES = {
     },
 }
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+ATAC_REFINEMENT_DEFAULTS = {
+    "enabled": True,
+    "fragment_maximum": 150,
+    "macs3_qvalue": 0.10,
+    "macs3_shift": -75,
+    "macs3_extsize": 150,
+    "bigwig_bin_size": 10,
+    "minimum_mean_cpm": 2.0,
+    "merge_gap_bp": 1,
+    "minimum_length": 50,
+    "maximum_length": 400,
+}
 
 
 def _safe_id(value: str, label: str) -> str:
@@ -217,6 +232,43 @@ def _manifest_runs_for_accessions(
     return [by_run[key] for key in sorted(by_run)]
 
 
+def _write_config_if_changed(path: Path, config: dict[str, object]) -> None:
+    """Atomically write a config without changing an identical file's mtime."""
+
+    if path.is_file():
+        existing = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(existing, dict):
+            existing_provenance = existing.get("provenance")
+            provenance = config.get("provenance")
+            if isinstance(existing_provenance, dict) and isinstance(provenance, dict):
+                new_generated_at = provenance.get("generated_at_utc")
+                generated_at = existing_provenance.get("generated_at_utc")
+                if generated_at:
+                    provenance["generated_at_utc"] = generated_at
+                if existing == config:
+                    return
+                provenance["generated_at_utc"] = new_generated_at
+            elif existing == config:
+                return
+
+    content = yaml.safe_dump(config, sort_keys=False, default_flow_style=False)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            handle.write(content)
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name and os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
 def generate_configs(
     *,
     manifest_path: Path,
@@ -318,10 +370,9 @@ def generate_configs(
                 "download_manifest": _display_path(manifest_path, path_base),
             },
         }
+        if assay == "atac":
+            config["atac_refinement"] = dict(ATAC_REFINEMENT_DEFAULTS)
         output_path = output_dir / f"{group_project}.yaml"
-        output_path.write_text(
-            yaml.safe_dump(config, sort_keys=False, default_flow_style=False),
-            encoding="utf-8",
-        )
+        _write_config_if_changed(output_path, config)
         output_paths.append(output_path.resolve())
     return output_paths

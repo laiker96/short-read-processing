@@ -54,3 +54,27 @@ def test_manifest_paths_are_portable_relative_to_manifest(tmp_path):
 
     assert "SRR123/SRR123.fastq.gz" in manifest.read_text()
     assert read_manifest(manifest)[0]["fastq_1"] == str(fastq)
+
+
+def test_identical_manifest_write_does_not_replace_file(tmp_path):
+    fastq = tmp_path / "raw" / "SRR123" / "SRR123.fastq.gz"
+    fastq.parent.mkdir(parents=True)
+    fastq.write_bytes(b"fastq")
+    plan = RunPlan(
+        requested_accession="SRR123",
+        experiment_accession="SRX123",
+        run_accession="SRR123",
+        library_layout="SINGLE",
+        backend="ena",
+        run_dir=fastq.parent,
+        files=[FilePlan("https://example/fastq", "abc", 5, fastq, "r1")],
+        status="downloaded",
+    )
+    manifest = tmp_path / "raw" / "download_manifest.tsv"
+    write_manifest(manifest, [plan])
+    manifest.touch()
+    timestamp = manifest.stat().st_mtime_ns
+
+    write_manifest(manifest, [plan])
+
+    assert manifest.stat().st_mtime_ns == timestamp

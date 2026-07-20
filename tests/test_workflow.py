@@ -184,6 +184,64 @@ def test_secondary_macs3_dry_run_reuses_primary_bam(tmp_path):
     assert re.search(r"secondary_callpeak\s+1", output)
 
 
+def test_primary_atac_workflow_includes_lenient_cpm_refinement(tmp_path):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["output_dir"] = str(tmp_path / "results")
+    config["samples"][0]["peak_caller"] = {
+        "command": "hmmratac",
+        "lower": 10,
+        "upper": 20,
+        "prescan_cutoff": 1.2,
+    }
+    config["atac_refinement"] = {
+        "enabled": True,
+        "fragment_maximum": 150,
+        "macs3_qvalue": 0.1,
+        "macs3_shift": -75,
+        "macs3_extsize": 150,
+        "bigwig_bin_size": 10,
+        "minimum_mean_cpm": 2.0,
+        "merge_gap_bp": 1,
+        "minimum_length": 50,
+        "maximum_length": 400,
+    }
+    config_path = tmp_path / "atac.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+    snakemake = Path(sys.executable).with_name("snakemake")
+    environment = os.environ.copy()
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [
+            str(snakemake),
+            "--snakefile",
+            "workflow/Snakefile",
+            "--configfile",
+            str(config_path),
+            "--cores",
+            "8",
+            "--dry-run",
+            "--printshellcmds",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert re.search(r"hmmratac\s+1", output)
+    assert re.search(r"filter_atac_short_fragments\s+1", output)
+    assert re.search(r"atac_short_fragment_bigwig\s+1", output)
+    assert re.search(r"call_lenient_atac_short_fragment_peaks\s+1", output)
+    assert re.search(r"refine_atac_short_fragment_cpm\s+1", output)
+    assert "tlen > -150 && tlen < 150" in output
+    assert "-q 0.1" in output
+    assert "--shift -75 --extsize 150" in output
+    assert "--keep-dup all" in output
+    assert "--minimum-mean-cpm 2.0" in output
+
+
 def test_auto_reference_preparation_dry_run(tmp_path):
     config = copy.deepcopy(BASE_CONFIG)
     reference_root = tmp_path / "references" / "dm6"

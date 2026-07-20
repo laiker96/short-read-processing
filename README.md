@@ -8,7 +8,9 @@ or `hmmratac`, and produces signal tracks and assay-aware QC summaries.
 
 The workflow runs raw and trimmed FastQC, Cutadapt, Bowtie2, duplicate marking,
 MAPQ/blacklist/mitochondrial filtering, MACS3 peak calling, BigWig generation,
-FRiP and assay-aware QC, and MultiQC. See [PLAN.md](PLAN.md) for design details.
+FRiP and assay-aware QC, and MultiQC. Paired-end ATAC runs also produce
+HMMRATAC peaks plus lenient short-fragment MACS3 candidates and CPM-refined
+peaks in the same DAG. See [PLAN.md](PLAN.md) for design details.
 
 ## Local environment
 
@@ -55,6 +57,11 @@ existing checksum-verified download. `--download-only`, `--config-only`, and
 `--snakemake-dry-run` stop at the corresponding boundary. Samples and lanes are
 scheduled independently subject to the local core and memory profile.
 
+The command is safe to restart. ENA downloads resume and are checksum checked;
+SRA fallback conversion is staged before FASTQs receive their final names;
+manifest and resolved-YAML writes are atomic and unchanged files are not
+replaced; and both supplied Snakemake profiles enable `rerun-incomplete`.
+
 Each technical lane is trimmed and aligned independently with a four-core job.
 The lane BAMs are coordinate-sorted, merged by biological library, and only then
 duplicate-marked. Thus, a 12-core run can align three lanes concurrently without
@@ -62,78 +69,11 @@ assigning the same cores simultaneously to Bowtie2 and SAMtools sort.
 
 ## Run on SLURM
 
-The generic `profiles/slurm/config.yaml` uses Snakemake's SLURM executor on a
-shared filesystem. Every rule's `threads` value becomes its per-job CPU request;
-SLURM determines which node runs it, while Snakemake submits independent lanes
-and samples concurrently. The profile limits queued/running workflow jobs to 100
-but deliberately does not impose an aggregate cluster-wide core limit.
-
-Run with the cluster profile and optionally tune the submission limits and
-per-rule CPUs from the launcher:
-
-```bash
-mamba run --prefix "$PWD/.venv" \
-  python src/run_pipeline.py samples.tsv \
-  --project chromatin-study \
-  --run-id baseline \
-  --workflow-profile profiles/slurm \
-  --jobs 50 \
-  --cores 200 \
-  --max-threads 16 \
-  --set-threads align_lane=8 \
-  --set-threads build_bowtie2_index=16
-```
-
-Here, `--jobs` caps simultaneous SLURM jobs, `--cores` caps their aggregate CPU
-requests, and `--max-threads` caps any one job. `--set-threads` overrides a
-specific rule and is repeatable. Omit `--cores` to let the job cap alone bound
-submission. Add cluster-specific defaults such as an account or partition by
-copying the profile and adding them under `default-resources`:
-
-```yaml
-default-resources:
-  mem_mb: 2000
-  runtime: 720
-  slurm_account: my_account
-  slurm_partition: compute
-```
-
-The orchestration environment includes the SLURM executor plugin. Re-run the
-repository-local Mamba environment command after pulling this change. The
-cluster nodes must see the repository, inputs, results, and `.snakemake/conda`
-through the same shared filesystem paths.
-
-`slurm/install_environment.sbatch` installs the orchestration environment at
-`$HOME/short-read-processing/.venv`; `slurm/run_atlas_atac.sbatch` processes all
-23 selected accessions in `resources/atlas_atac_selected.sample_sheet.tsv`
-inside one 24-core compute allocation. Both scripts refuse to run on a host
-named `cranex*`. The ATAC job reuses the staged, checksum-verified manifest and
-does not perform network downloads. On an offline cluster, stage the Micromamba
-package cache under `.cluster-bootstrap/root/pkgs`, packed rule environments
-under `.cluster-bootstrap/conda-envs`, FASTQs under `data/raw/atlas_atac`, and
-the prepared dm6 assets under `references/dm6` before submission.
-
-`slurm/download_and_run_atlas_atac_dual.sbatch` is the direct-download variant.
-Inside one compute allocation it installs the repo-local environment when
-needed, downloads and checksum-verifies all selected ENA FASTQs, runs the
-primary HMMRATAC workflow, and then runs MACS3 `callpeak` with `-f BAM
---nomodel --shift -75 --extsize 150 -B --SPMR` from the already-produced final
-BAMs. MACS3 outputs are isolated below
-`results/atlas-atac-dm6/macs3-shift-neg75-extsize-150/`; alignment is not run a
-second time. The job is safe to resubmit: aria2 resumes managed partial files,
-untracked size-mismatched partial copies are restarted, the manifest is written
-atomically, and Snakemake reruns incomplete jobs. It also refuses `cranex*`,
-checks compute-node ENA DNS before downloading, and uses a lock to prevent two
-jobs from writing the same dataset concurrently. It also raises the per-process
-open-file soft limit to 65,536 (or the cluster hard limit) so deepTools can
-concatenate temporary ATAC-shift BAM chunks for the 1,870-contig dm6 assembly.
-`slurm/download_and_run_atlas_h3k27ac_ip_only.sbatch` applies the same
-restart-safe direct-download pattern to the 15 selected H3K27ac IP-only runs,
-using broad MACS3 defaults without external input controls.
-From a networked workstation, `slurm/stage_and_submit_atlas.sh` waits for the
-completed local manifest, verifies a full dry-run, stages those assets, selects
-an idle CPU node with at least 24 CPUs and 24 GiB RAM, and submits the install
-and dependent processing jobs. Override `REMOTE` or `REMOTE_ROOT` when needed.
+All site-specific SLURM launchers and profiles are kept below the ignored
+`slurm/` directory. This prevents cluster paths, partitions, accounts, and
+scratch conventions from entering the portable repository. The workflow rules
+remain executor-independent: each rule's `threads` and `mem_mb` declarations
+can be consumed by a local SLURM profile.
 
 For generated `dm6` and `hg38` configs, reference preparation is part of the
 Snakemake DAG. The workflow downloads checksum-pinned UCSC FASTA and NCBI
@@ -181,8 +121,17 @@ Results are written below `results/<project>/<run_id>/`, including:
 - `peaks/` with narrow/broad/HMMRATAC peaks and MACS3 treatment/control
   bedGraphs for `callpeak`;
 - `tracks/*.CPM.bw`, plus Tn5-shifted ATAC BigWigs;
+- paired-end ATAC `atac_short_fragments/` outputs: `<150 bp` BAMs, Tn5-shifted
+  CPM BigWigs, lenient MACS3 narrowPeak candidates (`q=0.10`, `--shift -75`,
+  `--extsize 150`) and 50--400 bp CPM-refined BED peaks with mean CPM >= 2;
 - raw/trimmed FastQC, Cutadapt, alignment, FRiP, TSS, fragment-size, ChIP
   fingerprint/cross-correlation, metrics TSV/JSON, and MultiQC outputs.
+
+The ATAC refinement defaults are recorded in each resolved YAML under
+`atac_refinement` and can be edited there for a rerun. The refined BED scores
+come from the short-fragment CPM signal and are not q-values or independent FDR
+estimates. `src/build_igv_session.py` can assemble relative-path IGV sessions
+from the resulting ATAC and optional H3K27ac tracks.
 
 ## Download public FASTQs
 

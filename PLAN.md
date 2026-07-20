@@ -24,7 +24,7 @@ QC report. Downloaded raw inputs will remain read-only.
 Use Snakemake rather than Nextflow. Both are suitable, but Snakemake is the
 smaller fit for a local Mamba prefix, a single tabular entry point, Python-based
 validation, and selective reruns when one parameter set changes. Rule resources
-and workflow profiles leave a clean path to SLURM or another executor later.
+and workflow resources leave a clean path to SLURM or another executor later.
 
 The first implementation will not infer biological controls, choose thresholds
 automatically, or silently tune failed samples. Reference downloads use an
@@ -205,11 +205,9 @@ run. Defaults must be documented as guidance, not universal biological truth.
 - Large alignment/peak intermediates are marked `temp()` only after downstream
   outputs are verified; raw FASTQs and canonical BAMs are never overwritten.
 - `benchmark:` files capture wall time, CPU, and memory for later tuning.
-- Use `profiles/local/config.yaml` for one host or the generic
-  `profiles/slurm/config.yaml` for a shared-filesystem SLURM cluster. Both keep
-  rule environments in repo-relative `.snakemake/conda`; account, partition,
-  aggregate core, and queue limits remain profile/CLI settings rather than
-  machine-specific workflow code.
+- Use `profiles/local/config.yaml` for portable workstation runs. Site-specific
+  SLURM launchers and profiles live below the ignored `slurm/` directory.
+  Rule environments remain in repo-relative `.snakemake/conda`.
 
 ## Agent-ready tuning without autonomous behavior in v1
 

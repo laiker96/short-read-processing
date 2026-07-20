@@ -185,8 +185,20 @@ def _download_one_sra(plan: RunPlan, *, threads: int, keep_cache: bool) -> None:
     output_root = plan.run_dir.parent
     cache_dir = output_root / ".sra-cache" / plan.run_accession
     temporary_dir = output_root / ".fasterq-tmp" / plan.run_accession
+    staging_dir = output_root / ".sra-staging" / plan.run_accession
     cache_dir.parent.mkdir(parents=True, exist_ok=True)
-    temporary_dir.mkdir(parents=True, exist_ok=True)
+    if temporary_dir.exists():
+        shutil.rmtree(temporary_dir)
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True)
+    temporary_dir.mkdir(parents=True)
+
+    # A completion marker is written only after every compressed FASTQ has
+    # reached its final name. Without it, prior final files are incomplete
+    # transaction remnants and are safe to replace from the retained SRA cache.
+    for partial in plan.run_dir.glob(f"{plan.run_accession}*.fastq*"):
+        partial.unlink()
 
     _run(
         [prefetch, plan.run_accession, "--max-size", "u", "--output-directory", str(cache_dir)],
@@ -202,19 +214,33 @@ def _download_one_sra(plan: RunPlan, *, threads: int, keep_cache: bool) -> None:
             "--temp",
             str(temporary_dir),
             "--outdir",
-            str(plan.run_dir),
+            str(staging_dir),
         ],
         label=f"fasterq-dump {plan.run_accession}",
     )
 
-    uncompressed = sorted(plan.run_dir.glob(f"{plan.run_accession}*.fastq"))
+    uncompressed = sorted(staging_dir.glob(f"{plan.run_accession}*.fastq"))
     if not uncompressed:
         raise AcquisitionError(f"fasterq-dump produced no FASTQ files for {plan.run_accession}")
     compressed = [_gzip_fastq(path, threads=threads) for path in uncompressed]
-    _assign_local_sra_files(plan, compressed)
-    (plan.run_dir / ".download-complete").write_text("complete\n", encoding="utf-8")
+    staged_files = [
+        FilePlan(url="", md5="", size_bytes=path.stat().st_size, path=path)
+        for path in compressed
+    ]
+    classify_files(staged_files, plan.library_layout)
+    final_paths: list[Path] = []
+    for path in compressed:
+        destination = plan.run_dir / path.name
+        os.replace(path, destination)
+        final_paths.append(destination)
+    _assign_local_sra_files(plan, final_paths)
+    marker = plan.run_dir / ".download-complete"
+    temporary_marker = marker.with_suffix(".tmp")
+    temporary_marker.write_text("complete\n", encoding="utf-8")
+    os.replace(temporary_marker, marker)
     plan.status = "downloaded"
 
+    shutil.rmtree(staging_dir, ignore_errors=True)
     shutil.rmtree(temporary_dir, ignore_errors=True)
     if not keep_cache:
         shutil.rmtree(cache_dir, ignore_errors=True)

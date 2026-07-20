@@ -33,9 +33,32 @@ CHIP_CONTROLLED_TREATMENTS = [
     sample for sample in CHIP_TREATMENTS if SAMPLES[sample].get("control")
 ]
 ATAC_SAMPLES = SAMPLE_IDS if ASSAY == "atac" else []
+ATAC_REFINEMENT = config.get(
+    "atac_refinement",
+    {
+        "enabled": True,
+        "fragment_maximum": 150,
+        "macs3_qvalue": 0.10,
+        "macs3_shift": -75,
+        "macs3_extsize": 150,
+        "bigwig_bin_size": 10,
+        "minimum_mean_cpm": 2.0,
+        "merge_gap_bp": 1,
+        "minimum_length": 50,
+        "maximum_length": 400,
+    },
+)
+ATAC_REFINEMENT_SAMPLES = [
+    sample
+    for sample in TREATMENTS
+    if ASSAY == "atac"
+    and SAMPLES[sample]["layout"] == "paired"
+    and ATAC_REFINEMENT["enabled"]
+]
 
 SAMPLE_RE = wildcard_regex(SAMPLE_IDS)
 ATAC_RE = wildcard_regex(ATAC_SAMPLES)
+ATAC_REFINEMENT_RE = wildcard_regex(ATAC_REFINEMENT_SAMPLES)
 CHIP_TREATMENT_RE = wildcard_regex(CHIP_TREATMENTS)
 CHIP_CONTROLLED_TREATMENT_RE = wildcard_regex(CHIP_CONTROLLED_TREATMENTS)
 
@@ -105,6 +128,48 @@ FINAL_BAIS = {sample: FINAL_BAMS[sample] + ".bai" for sample in SAMPLE_IDS}
 BIGWIGS = {sample: f"{RESULT_ROOT}/tracks/{sample}.CPM.bw" for sample in SAMPLE_IDS}
 ATAC_SHIFTED_BIGWIGS = {
     sample: f"{RESULT_ROOT}/tracks/{sample}.Tn5-shifted.CPM.bw" for sample in ATAC_SAMPLES
+}
+ATAC_REFINEMENT_ROOT = f"{RESULT_ROOT}/atac_short_fragments"
+ATAC_FRAGMENT_MAXIMUM = int(ATAC_REFINEMENT["fragment_maximum"])
+ATAC_SHORT_BAMS = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/bam/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam"
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_SHORT_BAIS = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/bam/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam.bai"
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_SHORT_BIGWIGS = {
+    sample: (
+        f"{ATAC_REFINEMENT_ROOT}/tracks/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}"
+        ".Tn5-shifted.CPM.bw"
+    )
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_LENIENT_PEAKS = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/macs3/{sample}/{sample}_peaks.narrowPeak"
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_LENIENT_BEDGRAPHS = [
+    f"{ATAC_REFINEMENT_ROOT}/macs3/{sample}/{sample}_{suffix}.bdg"
+    for sample in ATAC_REFINEMENT_SAMPLES
+    for suffix in ("treat_pileup", "control_lambda")
+]
+ATAC_REFINED_PEAKS = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/refined/{sample}.CPM-refined.bed"
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_REFINEMENT_EXCLUDED = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/refined/{sample}.Excluded.bed"
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_REFINEMENT_STATS = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/refined/{sample}.stats.json"
+    for sample in ATAC_REFINEMENT_SAMPLES
+}
+ATAC_FRAGMENT_METRICS = {
+    sample: f"{ATAC_REFINEMENT_ROOT}/qc/{sample}.fragment-filter.tsv"
+    for sample in ATAC_REFINEMENT_SAMPLES
 }
 
 CALLPEAK_NARROW = [
@@ -195,6 +260,15 @@ FINAL_TARGETS = (
     + list(FINAL_BAIS.values())
     + list(BIGWIGS.values())
     + list(ATAC_SHIFTED_BIGWIGS.values())
+    + list(ATAC_SHORT_BAMS.values())
+    + list(ATAC_SHORT_BAIS.values())
+    + list(ATAC_SHORT_BIGWIGS.values())
+    + list(ATAC_LENIENT_PEAKS.values())
+    + ATAC_LENIENT_BEDGRAPHS
+    + list(ATAC_REFINED_PEAKS.values())
+    + list(ATAC_REFINEMENT_EXCLUDED.values())
+    + list(ATAC_REFINEMENT_STATS.values())
+    + list(ATAC_FRAGMENT_METRICS.values())
     + list(PEAKS.values())
     + CALLPEAK_BEDGRAPHS
     + list(FRIP_TSV.values())
@@ -218,4 +292,5 @@ include: "rules/reference.smk"
 include: "rules/read_processing.smk"
 include: "rules/alignment.smk"
 include: "rules/peaks.smk"
+include: "rules/atac_refinement.smk"
 include: "rules/qc.smk"

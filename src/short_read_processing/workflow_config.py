@@ -11,6 +11,18 @@ from .accessions import AcquisitionError
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CHECKSUM_RE = re.compile(r"^(?:md5:[0-9a-f]{32}|sha256:[0-9a-f]{64})$")
+ATAC_REFINEMENT_FIELDS = {
+    "enabled",
+    "fragment_maximum",
+    "macs3_qvalue",
+    "macs3_shift",
+    "macs3_extsize",
+    "bigwig_bin_size",
+    "minimum_mean_cpm",
+    "merge_gap_bp",
+    "minimum_length",
+    "maximum_length",
+}
 REFERENCE_FIELDS = {
     "name",
     "fasta",
@@ -44,6 +56,22 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
             raise AcquisitionError(f"Invalid {field}: {config[field]!r}")
     if config["assay"] not in {"atac", "chip_tf", "chip_histone"}:
         raise AcquisitionError(f"Unsupported assay: {config['assay']!r}")
+    refinement = config.get("atac_refinement")
+    if refinement is not None:
+        if config["assay"] != "atac" or not isinstance(refinement, dict):
+            raise AcquisitionError("atac_refinement is only valid for ATAC configurations")
+        _required(refinement, ATAC_REFINEMENT_FIELDS, "ATAC refinement")
+        if (
+            int(refinement["fragment_maximum"]) < 2
+            or not 0 < float(refinement["macs3_qvalue"]) <= 1
+            or int(refinement["macs3_extsize"]) < 1
+            or int(refinement["bigwig_bin_size"]) < 1
+            or float(refinement["minimum_mean_cpm"]) < 0
+            or int(refinement["merge_gap_bp"]) < 0
+            or int(refinement["minimum_length"]) < 1
+            or int(refinement["maximum_length"]) < int(refinement["minimum_length"])
+        ):
+            raise AcquisitionError("ATAC refinement parameters are invalid")
     if not isinstance(config["reference"], dict):
         raise AcquisitionError("reference must be a mapping")
     _required(config["reference"], REFERENCE_FIELDS, "Reference")

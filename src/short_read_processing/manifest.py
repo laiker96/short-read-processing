@@ -145,6 +145,8 @@ def write_manifest(path: Path, plans: Iterable[RunPlan], *, merge: bool = True) 
             )
             writer.writeheader()
             writer.writerows(rows)
+        if path.is_file() and path.read_bytes() == Path(temporary_name).read_bytes():
+            return
         os.replace(temporary_name, path)
     finally:
         if temporary_name and os.path.exists(temporary_name):
