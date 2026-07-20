@@ -1,5 +1,0 @@
-accession	sample_id	assay	genome	role	control_id	replicate	peak_caller	macs3_format	macs3_qvalue	macs3_broad	macs3_broad_cutoff	macs3_nomodel	macs3_shift	macs3_extsize	hmmratac_lower	hmmratac_upper	hmmratac_prescan_cutoff	adapter_preset	adapter_fasta	trim_quality_cutoff	trim_minimum_length	bowtie2_preset	maximum_fragment_length	mapq_minimum	remove_duplicates	remove_mitochondrial	notes
-SRR100001	atac_default_rep1	atac	dm6	treatment		1																					Blank peak_caller resolves to HMMRATAC for paired-end ATAC
-SRR100002	atac_macs_rep1	atac	dm6	treatment		1	callpeak	BAM	0.01	false		true	-75	150													MACS3 insertion-site style override
-SRR100003	TF_rep1	chip_tf	hg38	treatment	input_rep1	1	callpeak	AUTO	0.01	false		false						truseq		20	20	very-sensitive	2000	30	true	true	
-SRR100004	input_rep1	chip_tf	hg38	control		1												truseq		20	20	very-sensitive	2000	30	true	true	

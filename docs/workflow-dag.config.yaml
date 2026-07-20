@@ -1,0 +1,55 @@
+# Documentation-only paired-end ATAC config using the tracked tiny fixtures.
+project: workflow-dag
+run_id: representative-atac
+output_dir: tests/workflow_results
+assay: atac
+reference:
+  name: dm6
+  fasta: tests/fixtures/workflow/tiny.fa
+  bowtie2_index: tests/fixtures/workflow/index/tiny
+  chrom_sizes: tests/fixtures/workflow/tiny.chrom.sizes
+  blacklist_bed: tests/fixtures/workflow/tiny.blacklist.bed
+  tss_bed: tests/fixtures/workflow/tiny.tss.bed
+  autosomes_file: tests/fixtures/workflow/tiny.autosomes.txt
+  mitochondrial_contig: chrM
+  effective_genome_size: 20000
+  macs3_genome_size: 20000
+samples:
+  - id: atac_rep1
+    accessions: [SRR123456]
+    replicate: 1
+    role: treatment
+    layout: paired
+    r1: [tests/fixtures/workflow/sample_R1.fastq]
+    r2: [tests/fixtures/workflow/sample_R2.fastq]
+    peak_caller:
+      command: hmmratac
+      lower: 10
+      upper: 20
+      prescan_cutoff: 1.2
+    parameters:
+      trimming:
+        adapter_preset: nextera
+        adapter_fasta: null
+        quality_cutoff: 20
+        minimum_length: 20
+        error_rate: 0.1
+        minimum_overlap: 3
+      alignment:
+        preset: very-sensitive
+        maximum_fragment_length: 2000
+        mapq_minimum: 30
+      filtering:
+        remove_duplicates: true
+        remove_mitochondrial: true
+atac_refinement:
+  enabled: true
+  fragment_maximum: 150
+  macs3_qvalue: 0.10
+  macs3_shift: -75
+  macs3_extsize: 150
+  bigwig_bin_size: 10
+  minimum_mean_cpm: 2.0
+  merge_gap_bp: 1
+  minimum_length: 50
+  maximum_length: 400

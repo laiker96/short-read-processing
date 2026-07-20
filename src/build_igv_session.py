@@ -76,7 +76,14 @@ def build_session(
         sample = bigwig.name.removesuffix(ATAC_BIGWIG_SUFFIX)
         context, replicate = sample_parts(sample, ATAC_SAMPLE_RE)
         narrowpeak = results / "macs3" / sample / f"{sample}_peaks.narrowPeak"
-        refined = results / "cpm_refinement" / "refined" / f"{sample}.CPM-refined.bed"
+        refined = results / "refined" / f"{sample}.CPM-refined.bed"
+        if not refined.is_file():
+            refined = (
+                results
+                / "cpm_refinement"
+                / "refined"
+                / f"{sample}.CPM-refined.bed"
+            )
         missing.extend(path for path in (narrowpeak, refined) if not path.is_file())
         atac_by_context.setdefault(context, []).append(
             (sample, replicate, bigwig, narrowpeak, refined)
