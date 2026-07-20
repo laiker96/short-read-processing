@@ -272,7 +272,7 @@ atac_short_fragments/
   macs3/<sample>/*_{treat_pileup,control_lambda}.bdg
   refined/*.CPM-refined.bed            50-400 bp signal-refined peaks
   refined/*.Excluded.bed               final unselected signal intervals
-  refined/*.stats.json                 refinement counts and thresholds
+  refined/*.stats.json                 refinement status, counts, and thresholds
   qc/*.fragment-filter.tsv             retained-fragment statistics
 
 qc/
@@ -295,6 +295,8 @@ primary peaks. The additional short-fragment branch uses MACS3 `-f BAM
 --nomodel --shift -75 --extsize 150 -q 0.10 --keep-dup all`, followed by a mean
 CPM floor of 2 and 50-400 bp geometry. CPM-refined scores are signal-derived;
 they are not q-values or an independent FDR estimate.
+If a sample has no MACS3 candidates or no contained positive signal, refinement
+writes valid empty BED files and records the reason in the stats `status` field.
 
 ### Build an IGV session
 

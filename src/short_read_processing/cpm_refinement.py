@@ -91,8 +91,6 @@ def _read_peaks(
                 raise ValueError(f"{path}:{line_number}: invalid interval")
             peaks.setdefault(fields[0], []).append((start, end))
             count += 1
-    if not count:
-        raise ValueError(f"Peak file is empty: {path}")
     return PeakContainmentIndex(peaks), peaks, count
 
 
@@ -242,8 +240,6 @@ def refine_cpm_bigwig(
         contained.values(),
         key=lambda item: (chromosome_order[item.chrom], item.start, item.end),
     )
-    if not intervals:
-        raise ValueError("No positive BigWig intervals were fully contained by the peaks")
     refined, excluded_intervals, thresholds = progressively_refine_cpm(
         intervals,
         merge_gap_bp=merge_gap_bp,
@@ -251,7 +247,7 @@ def refine_cpm_bigwig(
         maximum_length=maximum_length,
         minimum_mean_cpm=minimum_mean_cpm,
     )
-    maximum_signal = max(item.maximum_cpm for item in intervals)
+    maximum_signal = max((item.maximum_cpm for item in intervals), default=1.0)
     _write_intervals(
         output,
         refined,
@@ -266,12 +262,19 @@ def refine_cpm_bigwig(
     )
 
     widths = [item.end - item.start for item in refined]
+    if peak_count == 0:
+        status = "no_candidate_peaks"
+    elif not intervals:
+        status = "no_contained_positive_signal"
+    else:
+        status = "ok"
     metrics: dict[str, int | float | str] = {
+        "status": status,
         "candidate_macs3_peaks": peak_count,
         "contained_positive_signal_intervals": len(intervals),
         "observed_positive_cpm_thresholds": len(thresholds),
-        "minimum_positive_cpm": thresholds[0],
-        "maximum_cpm": thresholds[-1],
+        "minimum_positive_cpm": thresholds[0] if thresholds else 0.0,
+        "maximum_cpm": thresholds[-1] if thresholds else 0.0,
         "refined_intervals": len(refined),
         "excluded_intervals": len(excluded_intervals),
         "minimum_width": min(widths) if widths else 0,

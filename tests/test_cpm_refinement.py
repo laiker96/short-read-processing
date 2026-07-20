@@ -1,11 +1,14 @@
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from short_read_processing.cpm_refinement import (
     SignalInterval,
     progressively_refine_cpm,
+    refine_cpm_bigwig,
 )
 
 
@@ -55,9 +58,49 @@ def test_progressive_cpm_refinement_rejects_invalid_minimum_mean_cpm(
         progressively_refine_cpm([], minimum_mean_cpm=minimum_mean_cpm)
 
 
+def test_empty_candidate_peaks_write_empty_outputs_and_status(
+    tmp_path: Path, monkeypatch
+):
+    class FakeBigWig:
+        def chroms(self):
+            return {"chr1": 1000}
+
+        def close(self):
+            pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pyBigWig",
+        SimpleNamespace(open=lambda _: FakeBigWig()),
+    )
+    peaks = tmp_path / "peaks.narrowPeak"
+    peaks.write_text("")
+    signal = tmp_path / "signal.bw"
+    signal.touch()
+    output = tmp_path / "refined.bed"
+    excluded = tmp_path / "excluded.bed"
+    stats = tmp_path / "stats.json"
+
+    metrics = refine_cpm_bigwig(
+        peaks=peaks,
+        signal_bigwig=signal,
+        output=output,
+        excluded=excluded,
+        stats=stats,
+    )
+
+    assert output.read_text() == ""
+    assert excluded.read_text() == ""
+    assert metrics["status"] == "no_candidate_peaks"
+    assert metrics["candidate_macs3_peaks"] == 0
+    assert metrics["refined_intervals"] == 0
+    assert metrics["minimum_positive_cpm"] == 0.0
+    assert metrics["maximum_cpm"] == 0.0
+    assert json.loads(stats.read_text()) == metrics
+
+
 def test_cpm_bigwig_refinement_writes_signal_scores(tmp_path: Path):
     pybigwig = pytest.importorskip("pyBigWig")
-    from short_read_processing.cpm_refinement import refine_cpm_bigwig
 
     signal = tmp_path / "signal.bw"
     bigwig = pybigwig.open(str(signal), "w")
@@ -90,5 +133,6 @@ def test_cpm_bigwig_refinement_writes_signal_scores(tmp_path: Path):
     assert excluded.read_text() == ""
     assert metrics["candidate_macs3_peaks"] == 2
     assert metrics["refined_intervals"] == 1
+    assert metrics["status"] == "ok"
     assert metrics["minimum_mean_cpm"] == 1.5
     assert json.loads(stats.read_text()) == metrics
