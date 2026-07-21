@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from short_read_processing.accessions import AcquisitionError
-from short_read_processing.configuration import REFERENCE_SOURCES
+from short_read_processing.configuration import ATAC_REFINEMENT_DEFAULTS, REFERENCE_SOURCES
 from short_read_processing.workflow_config import validate_workflow_config
 
 
@@ -140,6 +140,43 @@ def test_workflow_config_rejects_callpeak_without_bedgraphs():
         validate_workflow_config(config)
 
 
+def test_workflow_config_rejects_atlas_when_refinement_is_disabled():
+    config = copy.deepcopy(BASE_CONFIG)
+    config["atac_refinement"] = {
+        "enabled": False,
+        "fragment_maximum": 150,
+        "macs3_qvalue": 0.1,
+        "macs3_shift": -75,
+        "macs3_extsize": 150,
+        "bigwig_bin_size": 10,
+        "minimum_mean_cpm": 2.0,
+        "minimum_mode_prominence": 0.25,
+        "merge_gap_bp": 1,
+        "minimum_length": 50,
+        "maximum_length": 400,
+    }
+    config["atac_atlas"] = {
+        "enabled": True,
+        "condition_map": "conditions.tsv",
+        "peak_width": 250,
+        "minimum_replicates": 2,
+        "replicate_overlap_fraction": 0.5,
+    }
+
+    with pytest.raises(AcquisitionError, match="requires atac_refinement.enabled=true"):
+        validate_workflow_config(config)
+
+
+@pytest.mark.parametrize("prominence", [-0.01, 1.01])
+def test_workflow_config_rejects_invalid_mode_prominence(prominence):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["atac_refinement"] = dict(ATAC_REFINEMENT_DEFAULTS)
+    config["atac_refinement"]["minimum_mode_prominence"] = prominence
+
+    with pytest.raises(AcquisitionError, match="refinement parameters are invalid"):
+        validate_workflow_config(config)
+
+
 def test_secondary_macs3_dry_run_reuses_primary_bam(tmp_path):
     config = copy.deepcopy(BASE_CONFIG)
     config["output_dir"] = str(tmp_path / "results")
@@ -201,6 +238,7 @@ def test_primary_atac_workflow_includes_lenient_cpm_refinement(tmp_path):
         "macs3_extsize": 150,
         "bigwig_bin_size": 10,
         "minimum_mean_cpm": 2.0,
+        "minimum_mode_prominence": 0.25,
         "merge_gap_bp": 1,
         "minimum_length": 50,
         "maximum_length": 400,
@@ -240,6 +278,78 @@ def test_primary_atac_workflow_includes_lenient_cpm_refinement(tmp_path):
     assert "--shift -75 --extsize 150" in output
     assert "--keep-dup all" in output
     assert "--minimum-mean-cpm 2.0" in output
+    assert "--minimum-mode-prominence 0.25" in output
+
+
+def test_optional_atac_atlas_branch_dry_run(tmp_path):
+    config = copy.deepcopy(BASE_CONFIG)
+    config["output_dir"] = str(tmp_path / "results")
+    second = copy.deepcopy(config["samples"][0])
+    second["id"] = "atac_rep2"
+    second["accessions"] = ["SRR123457"]
+    second["replicate"] = 2
+    config["samples"].append(second)
+    condition_map = tmp_path / "conditions.tsv"
+    condition_map.write_text(
+        "condition_id\tcondition_label\tsample_id\n"
+        "embryo\tEmbryo\tatac_rep1\n"
+        "embryo\tEmbryo\tatac_rep2\n"
+    )
+    config["atac_atlas"] = {
+        "enabled": True,
+        "condition_map": str(condition_map),
+        "peak_width": 250,
+        "minimum_replicates": 2,
+        "replicate_overlap_fraction": 0.5,
+    }
+    config_path = tmp_path / "atac-atlas.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+    snakemake = Path(sys.executable).with_name("snakemake")
+    environment = os.environ.copy()
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    result = subprocess.run(
+        [
+            str(snakemake),
+            "--snakefile",
+            "workflow/Snakefile",
+            "--configfile",
+            str(config_path),
+            "--cores",
+            "8",
+            "--dry-run",
+            "--printshellcmds",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert re.search(r"merge_atac_condition_short_fragments\s+1", output)
+    assert re.search(r"call_atac_condition_candidates\s+1", output)
+    assert re.search(r"refine_atac_condition_cpm\s+1", output)
+    assert re.search(r"filter_atac_condition_replicate_support\s+1", output)
+    assert re.search(r"build_cross_condition_atac_atlas\s+1", output)
+    assert re.search(
+        r"build_narrow_first_cross_condition_atac_atlas\s+1", output
+    )
+    assert re.search(r"build_atac_dhs_support_fwhm\s+1", output)
+    assert re.search(r"build_atac_dhs_center_mode_width\s+1", output)
+    assert re.search(r"build_dhs_driven_atac_atlas\s+1", output)
+    assert re.search(r"shape_dhs_driven_atac_atlas\s+1", output)
+    assert "--replicate atac_rep1=" in output
+    assert "--replicate atac_rep2=" in output
+    assert "--peak-width 250" in output
+    assert "--variable-bed" in output
+    assert "--grouping-method fixed_window" in output
+    assert "--grouping-method fixed_window_narrow_first" in output
+    assert "--grouping-method dhs_seed" in output
+    assert "--condition-bigwig embryo=" in output
+    assert "--condition-dhs embryo=" in output
+    assert "center-mode --anchors-bed" in output
+    assert "--relative-threshold 0.2" in output
 
 
 def test_auto_reference_preparation_dry_run(tmp_path):

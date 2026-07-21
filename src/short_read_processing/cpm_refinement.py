@@ -1,4 +1,4 @@
-"""Progressively refine MACS3 peaks using a CPM BigWig signal."""
+"""Refine MACS3 candidates from high to low CPM BigWig signal."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from statistics import median
+
+
+REFINEMENT_ALGORITHM = "descending_cpm_prominence_watershed_v1"
 
 
 @dataclass(frozen=True)
@@ -59,21 +62,6 @@ class PeakContainmentIndex:
         return index >= 0 and self.maximum_ends[chrom][index] >= end
 
 
-class NonOverlappingIndex:
-    def __init__(self):
-        self.intervals: dict[str, list[tuple[int, int]]] = {}
-
-    def overlaps(self, chrom: str, start: int, end: int) -> bool:
-        intervals = self.intervals.setdefault(chrom, [])
-        index = bisect.bisect_left(intervals, (start, -1))
-        if index and intervals[index - 1][1] > start:
-            return True
-        return index < len(intervals) and intervals[index][0] < end
-
-    def add(self, chrom: str, start: int, end: int) -> None:
-        bisect.insort(self.intervals.setdefault(chrom, []), (start, end))
-
-
 def _read_peaks(
     path: Path,
 ) -> tuple[PeakContainmentIndex, dict[str, list[tuple[int, int]]], int]:
@@ -94,30 +82,6 @@ def _read_peaks(
     return PeakContainmentIndex(peaks), peaks, count
 
 
-def _merge(
-    intervals: list[SignalInterval], *, merge_gap_bp: int, minimum_length: int
-) -> list[SignalInterval]:
-    merged: list[SignalInterval] = []
-    for interval in intervals:
-        if (
-            not merged
-            or interval.chrom != merged[-1].chrom
-            or interval.start > merged[-1].end + merge_gap_bp
-        ):
-            merged.append(interval)
-            continue
-        previous = merged[-1]
-        merged[-1] = SignalInterval(
-            chrom=previous.chrom,
-            start=previous.start,
-            end=max(previous.end, interval.end),
-            maximum_cpm=max(previous.maximum_cpm, interval.maximum_cpm),
-            weighted_signal=previous.weighted_signal + interval.weighted_signal,
-            signal_bases=previous.signal_bases + interval.signal_bases,
-        )
-    return [item for item in merged if item.end - item.start >= minimum_length]
-
-
 def progressively_refine_cpm(
     intervals: list[SignalInterval],
     *,
@@ -125,8 +89,9 @@ def progressively_refine_cpm(
     minimum_length: int = 50,
     maximum_length: int = 400,
     minimum_mean_cpm: float = 0.0,
+    minimum_mode_prominence: float = 0.25,
 ) -> tuple[list[SignalInterval], list[SignalInterval], list[float]]:
-    """Apply the rDHS geometric selection over all observed CPM cutoffs."""
+    """Grow high-CPM modes and retain sufficiently prominent mode mergers."""
 
     if (
         merge_gap_bp < 0
@@ -134,42 +99,166 @@ def progressively_refine_cpm(
         or maximum_length < minimum_length
         or not math.isfinite(minimum_mean_cpm)
         or minimum_mean_cpm < 0
+        or not math.isfinite(minimum_mode_prominence)
+        or not 0 <= minimum_mode_prominence <= 1
     ):
-        raise ValueError("Invalid merge-gap or interval-length parameters")
+        raise ValueError("Invalid refinement parameter")
     if not intervals:
         return [], [], []
-    thresholds = sorted({interval.maximum_cpm for interval in intervals})
-    active = intervals
-    selected: list[SignalInterval] = []
-    selected_index = NonOverlappingIndex()
-    final_threshold_intervals: list[SignalInterval] = []
+    intervals = sorted(
+        intervals,
+        key=lambda item: (item.chrom, item.start, item.end),
+    )
+    thresholds = sorted(
+        {interval.maximum_cpm for interval in intervals}, reverse=True
+    )
+    activation_order = sorted(
+        range(len(intervals)),
+        key=lambda index: intervals[index].maximum_cpm,
+        reverse=True,
+    )
+    parent = list(range(len(intervals)))
+    active = [False] * len(intervals)
+    starts = [item.start for item in intervals]
+    ends = [item.end for item in intervals]
+    maxima = [item.maximum_cpm for item in intervals]
+    weighted_signals = [item.weighted_signal for item in intervals]
+    signal_bases = [item.signal_bases for item in intervals]
+    component_mode_ids: list[list[int] | None] = [None] * len(intervals)
+    mode_snapshots: list[SignalInterval] = []
+    retained_modes: list[bool] = []
 
-    for threshold_index, threshold in enumerate(thresholds):
-        if threshold_index:
-            active = [item for item in active if item.maximum_cpm >= threshold]
-        threshold_intervals = _merge(
-            active,
-            merge_gap_bp=merge_gap_bp,
-            minimum_length=minimum_length,
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int, saddle_cpm: float) -> int:
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return left_root
+        if left_root > right_root:
+            left_root, right_root = right_root, left_root
+        parent[right_root] = left_root
+        starts[left_root] = min(starts[left_root], starts[right_root])
+        ends[left_root] = max(ends[left_root], ends[right_root])
+        maxima[left_root] = max(maxima[left_root], maxima[right_root])
+        weighted_signals[left_root] += weighted_signals[right_root]
+        signal_bases[left_root] += signal_bases[right_root]
+        left_modes = component_mode_ids[left_root]
+        right_modes = component_mode_ids[right_root]
+        if left_modes and right_modes:
+            left_maximum = max(
+                mode_snapshots[mode_id].maximum_cpm for mode_id in left_modes
+            )
+            right_maximum = max(
+                mode_snapshots[mode_id].maximum_cpm for mode_id in right_modes
+            )
+            lower_maximum = min(left_maximum, right_maximum)
+            prominence = (lower_maximum - saddle_cpm) / lower_maximum
+            if prominence >= minimum_mode_prominence:
+                left_modes.extend(right_modes)
+            else:
+                if right_maximum > left_maximum:
+                    retained, discarded = right_modes, left_modes
+                else:
+                    retained, discarded = left_modes, right_modes
+                for mode_id in discarded:
+                    retained_modes[mode_id] = False
+                component_mode_ids[left_root] = retained
+        elif right_modes:
+            component_mode_ids[left_root] = right_modes
+        component_mode_ids[right_root] = None
+        return left_root
+
+    def component(root: int) -> SignalInterval:
+        root = find(root)
+        return SignalInterval(
+            chrom=intervals[root].chrom,
+            start=starts[root],
+            end=ends[root],
+            maximum_cpm=maxima[root],
+            weighted_signal=weighted_signals[root],
+            signal_bases=signal_bases[root],
         )
-        if threshold_index == len(thresholds) - 1:
-            final_threshold_intervals = threshold_intervals
-        for interval in threshold_intervals:
-            if interval.mean_cpm < minimum_mean_cpm:
-                continue
-            if interval.end - interval.start > maximum_length:
-                continue
-            if selected_index.overlaps(interval.chrom, interval.start, interval.end):
-                continue
-            selected.append(replace(interval, selection_cutoff_cpm=threshold))
-            selected_index.add(interval.chrom, interval.start, interval.end)
 
+    activation_index = 0
+
+    for threshold in thresholds:
+        activated: list[int] = []
+        while (
+            activation_index < len(activation_order)
+            and intervals[activation_order[activation_index]].maximum_cpm == threshold
+        ):
+            index = activation_order[activation_index]
+            active[index] = True
+            activated.append(index)
+            activation_index += 1
+        for index in activated:
+            if (
+                index > 0
+                and active[index - 1]
+                and intervals[index - 1].chrom == intervals[index].chrom
+                and intervals[index].start <= intervals[index - 1].end + merge_gap_bp
+            ):
+                union(index - 1, index, threshold)
+            if (
+                index + 1 < len(intervals)
+                and active[index + 1]
+                and intervals[index + 1].chrom == intervals[index].chrom
+                and intervals[index + 1].start <= intervals[index].end + merge_gap_bp
+            ):
+                union(index, index + 1, threshold)
+
+        changed = sorted(
+            {find(index) for index in activated},
+            key=lambda root: (
+                intervals[root].chrom,
+                starts[root],
+                ends[root],
+            ),
+        )
+        for root in changed:
+            interval = component(root)
+            qualifies = (
+                minimum_length <= interval.end - interval.start <= maximum_length
+                and interval.mean_cpm >= minimum_mean_cpm
+            )
+            modes = component_mode_ids[root]
+            if not qualifies or (modes and len(modes) > 1):
+                continue
+            snapshot = replace(interval, selection_cutoff_cpm=threshold)
+            if modes:
+                mode_snapshots[modes[0]] = snapshot
+            else:
+                component_mode_ids[root] = [len(mode_snapshots)]
+                mode_snapshots.append(snapshot)
+                retained_modes.append(True)
+
+    final_roots = [
+        root
+        for root in sorted(
+            {find(index) for index in range(len(intervals))},
+            key=lambda root: (
+                intervals[root].chrom,
+                starts[root],
+                ends[root],
+            ),
+        )
+        if ends[root] - starts[root] >= minimum_length
+    ]
+    final_threshold_intervals = [component(root) for root in final_roots]
     excluded = [
         interval
-        for interval in final_threshold_intervals
-        if not selected_index.overlaps(interval.chrom, interval.start, interval.end)
+        for root, interval in zip(final_roots, final_threshold_intervals)
+        if not component_mode_ids[root]
     ]
-    return selected, excluded, thresholds
+    return [
+        interval
+        for interval, retained in zip(mode_snapshots, retained_modes)
+        if retained
+    ], excluded, thresholds
 
 
 def _write_intervals(
@@ -206,6 +295,7 @@ def refine_cpm_bigwig(
     minimum_length: int = 50,
     maximum_length: int = 400,
     minimum_mean_cpm: float = 0.0,
+    minimum_mode_prominence: float = 0.25,
 ) -> dict[str, int | float | str]:
     """Refine MACS3 peaks with positive CPM bins fully contained by the peaks."""
 
@@ -246,6 +336,7 @@ def refine_cpm_bigwig(
         minimum_length=minimum_length,
         maximum_length=maximum_length,
         minimum_mean_cpm=minimum_mean_cpm,
+        minimum_mode_prominence=minimum_mode_prominence,
     )
     maximum_signal = max((item.maximum_cpm for item in intervals), default=1.0)
     _write_intervals(
@@ -271,20 +362,26 @@ def refine_cpm_bigwig(
     metrics: dict[str, int | float | str] = {
         "status": status,
         "candidate_macs3_peaks": peak_count,
+        "refinement_algorithm": REFINEMENT_ALGORITHM,
         "contained_positive_signal_intervals": len(intervals),
         "observed_positive_cpm_thresholds": len(thresholds),
-        "minimum_positive_cpm": thresholds[0] if thresholds else 0.0,
-        "maximum_cpm": thresholds[-1] if thresholds else 0.0,
+        "minimum_positive_cpm": min(thresholds, default=0.0),
+        "maximum_cpm": max(thresholds, default=0.0),
         "refined_intervals": len(refined),
         "excluded_intervals": len(excluded_intervals),
         "minimum_width": min(widths) if widths else 0,
         "median_width": float(median(widths)) if widths else 0.0,
         "maximum_width": max(widths) if widths else 0,
         "minimum_mean_cpm": minimum_mean_cpm,
+        "minimum_mode_prominence": minimum_mode_prominence,
         "merge_gap_bp": merge_gap_bp,
         "minimum_length": minimum_length,
         "maximum_length_parameter": maximum_length,
-        "threshold_rule": "all observed positive CPM levels, ascending; signal >= cutoff",
+        "threshold_rule": (
+            "all observed positive CPM levels, descending; signal >= cutoff; "
+            "merge modes below the configured relative saddle prominence; "
+            "freeze boundaries before retained prominent mode mergers"
+        ),
         "output_columns": "BED6,mean_cpm,max_cpm,selection_cutoff_cpm",
     }
     stats.parent.mkdir(parents=True, exist_ok=True)

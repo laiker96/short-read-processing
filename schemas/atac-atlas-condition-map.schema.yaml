@@ -1,0 +1,21 @@
+schema_version: 1
+name: ATAC atlas condition map
+formats: [tsv, csv]
+row_model: One row assigns one biological ATAC library to one condition.
+required_columns: [condition_id, condition_label, sample_id]
+fields:
+  condition_id:
+    type: string
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    description: Stable path-safe condition identifier.
+  condition_label:
+    type: string
+    description: Human-readable tissue or developmental-stage label.
+  sample_id:
+    type: string
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    description: Biological-library ID from the accession sample sheet.
+rules:
+  - Every ATAC sample_id in an enabled atlas run must occur exactly once.
+  - Every condition must contain at least atac_atlas.minimum_replicates libraries.
+  - Technical accessions are absent because they already share one sample_id.

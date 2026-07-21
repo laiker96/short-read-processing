@@ -1,0 +1,23 @@
+condition_id	condition_label	sample_id
+e5	embryo stage 5 / 2-4h	e5_atac_rep1
+e5	embryo stage 5 / 2-4h	e5_atac_rep2
+e11	embryo stage 11 / 6-8h	e11_atac_rep1
+e11	embryo stage 11 / 6-8h	e11_atac_rep2
+e13	embryo stage 13 / 10-12h	e13_atac_rep1
+e13	embryo stage 13 / 10-12h	e13_atac_rep2
+hid	haltere imaginal disc	hid_atac_rep1
+hid	haltere imaginal disc	hid_atac_rep2
+ead	eye / eye-antennal disc	ead_atac_rep2
+ead	eye / eye-antennal disc	ead_atac_rep3
+ead	eye / eye-antennal disc	ead_atac_rep4
+ab	adult brain / CNS	ab_atac_rep1
+ab	adult brain / CNS	ab_atac_rep2
+ab	adult brain / CNS	ab_atac_rep3
+o	ovary	o_atac_rep1
+o	ovary	o_atac_rep2
+o	ovary	o_atac_rep3
+lb	larval brain / CNS	lb_atac_rep1
+lb	larval brain / CNS	lb_atac_rep2
+lb	larval brain / CNS	lb_atac_rep3
+wid	wing imaginal disc	wid_atac_rep1
+wid	wing imaginal disc	wid_atac_rep2

@@ -132,3 +132,72 @@ def atac_refinement_callpeak_argv(wildcards):
     )
     arguments.extend(["--keep-dup", "all"])
     return shlex.join(arguments)
+
+
+def atac_atlas_condition_callpeak_argv(wildcards):
+    condition = wildcards.condition
+    peak_config = {
+        "command": "callpeak",
+        "format": "BAM",
+        "qvalue": ATAC_REFINEMENT["macs3_qvalue"],
+        "broad": False,
+        "nomodel": True,
+        "shift": ATAC_REFINEMENT["macs3_shift"],
+        "extsize": ATAC_REFINEMENT["macs3_extsize"],
+        "write_bedgraph": True,
+        "spmr": True,
+    }
+    arguments = callpeak_arguments(
+        peak_config,
+        treatment_bam=Path(ATAC_ATLAS_CONDITION_SHORT_BAMS[condition]),
+        control_bam=None,
+        name=condition,
+        genome_size=REFERENCE["macs3_genome_size"],
+        output_dir=Path(f"{ATAC_ATLAS_ROOT}/conditions/{condition}/macs3"),
+    )
+    arguments.extend(["--keep-dup", "all"])
+    return shlex.join(arguments)
+
+
+def atac_atlas_replicate_arguments(wildcards):
+    condition = wildcards.condition
+    return " ".join(
+        "--replicate "
+        + shlex.quote(f"{sample}={ATAC_REFINED_PEAKS[sample]}")
+        for sample in ATAC_ATLAS_CONDITIONS[condition].samples
+    )
+
+
+def atac_atlas_condition_arguments(_wildcards):
+    return " ".join(
+        "--condition "
+        + " ".join(
+            shlex.quote(value)
+            for value in (
+                condition,
+                ATAC_ATLAS_CONSENSUS_PEAKS[condition],
+                ATAC_ATLAS_CONDITION_BIGWIGS[condition],
+            )
+        )
+        for condition in ATAC_ATLAS_CONDITION_IDS
+    )
+
+
+def atac_atlas_condition_bigwig_arguments(_wildcards):
+    return " ".join(
+        "--condition-bigwig "
+        + shlex.quote(
+            f"{condition}={ATAC_ATLAS_CONDITION_BIGWIGS[condition]}"
+        )
+        for condition in ATAC_ATLAS_CONDITION_IDS
+    )
+
+
+def atac_atlas_condition_dhs_arguments(_wildcards):
+    return " ".join(
+        "--condition-dhs "
+        + shlex.quote(
+            f"{condition}={ATAC_ATLAS_CONSENSUS_PEAKS[condition]}"
+        )
+        for condition in ATAC_ATLAS_CONDITION_IDS
+    )

@@ -9,6 +9,8 @@ runs and the adapter sequences used by the workflow.
   evidence.
 - `atlas_atac_selected.sample_sheet.tsv`: canonical pipeline input containing
   the 23 selected runs representing 22 biological ATAC libraries.
+- `atlas_atac_conditions.tsv`: explicit assignment of those 22 biological
+  libraries to nine tissue/stage conditions for the optional atlas stage.
 - `atlas_h3k27ac_metadata_ip_only.tsv`: curated H3K27ac source metadata and
   selection evidence.
 - `atlas_h3k27ac_ip_only.sample_sheet.tsv`: canonical pipeline input containing

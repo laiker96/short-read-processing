@@ -19,9 +19,17 @@ ATAC_REFINEMENT_FIELDS = {
     "macs3_extsize",
     "bigwig_bin_size",
     "minimum_mean_cpm",
+    "minimum_mode_prominence",
     "merge_gap_bp",
     "minimum_length",
     "maximum_length",
+}
+ATAC_ATLAS_FIELDS = {
+    "enabled",
+    "condition_map",
+    "peak_width",
+    "minimum_replicates",
+    "replicate_overlap_fraction",
 }
 REFERENCE_FIELDS = {
     "name",
@@ -67,11 +75,26 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
             or int(refinement["macs3_extsize"]) < 1
             or int(refinement["bigwig_bin_size"]) < 1
             or float(refinement["minimum_mean_cpm"]) < 0
+            or not 0 <= float(refinement["minimum_mode_prominence"]) <= 1
             or int(refinement["merge_gap_bp"]) < 0
             or int(refinement["minimum_length"]) < 1
             or int(refinement["maximum_length"]) < int(refinement["minimum_length"])
         ):
             raise AcquisitionError("ATAC refinement parameters are invalid")
+    atlas = config.get("atac_atlas")
+    if atlas is not None:
+        if config["assay"] != "atac" or not isinstance(atlas, dict):
+            raise AcquisitionError("atac_atlas is only valid for ATAC configurations")
+        _required(atlas, ATAC_ATLAS_FIELDS, "ATAC atlas")
+        if not isinstance(atlas["enabled"], bool):
+            raise AcquisitionError("ATAC atlas enabled must be true or false")
+        if (
+            int(atlas["peak_width"]) < 1
+            or int(atlas["minimum_replicates"]) < 2
+            or not 0 < float(atlas["replicate_overlap_fraction"]) <= 1
+            or not str(atlas["condition_map"])
+        ):
+            raise AcquisitionError("ATAC atlas parameters are invalid")
     if not isinstance(config["reference"], dict):
         raise AcquisitionError("reference must be a mapping")
     _required(config["reference"], REFERENCE_FIELDS, "Reference")
@@ -157,6 +180,12 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
         if config["assay"] == "atac" and sample["role"] != "treatment":
             raise AcquisitionError("ATAC configurations cannot contain control samples")
 
+    if atlas and atlas["enabled"]:
+        if refinement is not None and not refinement["enabled"]:
+            raise AcquisitionError("ATAC atlas requires atac_refinement.enabled=true")
+        if any(sample["layout"] != "paired" for sample in samples):
+            raise AcquisitionError("ATAC atlas requires paired-end biological libraries")
+
 
 def resolve_input_paths(config: dict[str, Any], base: Path) -> None:
     """Resolve relative FASTQ/reference paths against a config's launch directory in place."""
@@ -179,3 +208,11 @@ def resolve_input_paths(config: dict[str, Any], base: Path) -> None:
             sample["parameters"]["trimming"]["adapter_fasta"] = str(
                 path if path.is_absolute() else (base / path).resolve()
             )
+    atlas = config.get("atac_atlas")
+    if atlas:
+        condition_map = Path(atlas["condition_map"])
+        atlas["condition_map"] = str(
+            condition_map
+            if condition_map.is_absolute()
+            else (base / condition_map).resolve()
+        )

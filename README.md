@@ -11,6 +11,10 @@ Paired-end ATAC defaults to two complementary peak products in one run:
 - lenient MACS3 candidates from `<150 bp` fragments, followed by CPM-based
   refinement.
 
+For multi-condition paired-end ATAC projects, an optional downstream stage
+builds replicate-supported condition peaks and a bounded nonredundant atlas
+without merging tissue-specific peaks into long chained intervals.
+
 ![short-read-processing workflow DAG](docs/workflow-dag.svg)
 
 The figure is the Snakemake rule graph for a representative paired-end ATAC
@@ -193,7 +197,8 @@ The curated atlas sheets are ready to use:
 mamba run --prefix "$PWD/.venv" \
   python src/run_pipeline.py resources/atlas_atac_selected.sample_sheet.tsv \
   --project atlas-atac-dm6 --run-id baseline \
-  --output-dir data/raw/atlas_atac --cores 24
+  --output-dir data/raw/atlas_atac --cores 24 \
+  --atac-atlas-condition-map resources/atlas_atac_conditions.tsv
 
 # H3K27ac: 15 IP-only runs
 mamba run --prefix "$PWD/.venv" \
@@ -204,6 +209,15 @@ mamba run --prefix "$PWD/.venv" \
 
 The source selection metadata and deterministic sample-sheet generators are
 documented in [`resources/README.md`](resources/README.md).
+
+The optional condition map follows
+[`schemas/atac-atlas-condition-map.schema.yaml`](schemas/atac-atlas-condition-map.schema.yaml).
+It assigns each biological `sample_id` exactly once; technical accessions do
+not appear because they have already been merged into that biological library.
+Atlas defaults are two supporting biological replicates, at least 50% pooled
+peak coverage per supporting replicate, and 250-bp global atlas windows. These
+can be changed with `--atac-atlas-minimum-replicates`,
+`--atac-atlas-overlap-fraction`, and `--atac-atlas-peak-width`.
 
 ### Restart or resume
 
@@ -271,9 +285,44 @@ atac_short_fragments/
   macs3/<sample>/*_peaks.narrowPeak    lenient q=0.10 candidates
   macs3/<sample>/*_{treat_pileup,control_lambda}.bdg
   refined/*.CPM-refined.bed            50-400 bp signal-refined peaks
-  refined/*.Excluded.bed               final unselected signal intervals
+  refined/*.Excluded.bed               lowest-cutoff unselected signal intervals
   refined/*.stats.json                 refinement status, counts, and thresholds
   qc/*.fragment-filter.tsv             retained-fragment statistics
+
+atac_atlas/
+  conditions/<condition>/bam/          restartable pooled short-fragment BAM and index
+  conditions/<condition>/              pooled candidates, CPM track, and refinement
+  conditions/<condition>/*.consensus.bed
+                                       replicate-supported condition peaks
+  conditions/<condition>/*.support.tsv per-replicate pooled-peak coverage
+  atlas.peaks.bed                      bounded non-overlapping global atlas
+  atlas.variable.peaks.bed             condition-balanced variable boundaries
+  atlas.membership.tsv                 source peak-to-atlas assignments
+  atlas.presence.tsv                   condition presence matrix
+  atlas.coverage_fraction.tsv          condition peak coverage matrix
+  atlas.mean_cpm.tsv                   mean condition CPM matrix
+  atlas.maximum_cpm.tsv                maximum condition CPM matrix
+  atlas.stats.json                     method, parameters, and counts
+  atlas.narrow-first.anchors250.bed     narrow-source-first fixed anchors
+  atlas.narrow-first.variable.peaks.bed condition-balanced boundaries for those anchors
+  atlas.narrow-first.*.tsv/json         membership, matrices, and provenance
+  atlas.dhs-support-fraction.bw         fraction of conditions with a DHS at each base
+  atlas.fwhm-boundaries.bed             anchor-centered DHS-support half-maximum widths
+  atlas.fwhm-diagnostics.tsv            support and neighbor-contact diagnostics
+  atlas.fwhm.stats.json                 FWHM method and summary counts
+  atlas.center-mode-half-prominence-boundaries.bed
+                                       center-associated local support modes
+  atlas.center-mode-half-prominence-*.tsv/json
+                                       local-mode prominence diagnostics and summary
+  atlas.dhs-driven.anchors250.bed       post-grouping measurement anchors
+  atlas.dhs-driven.peaks.bed            direct DHS-seed consensus boundaries
+  atlas.dhs-driven.*.tsv/json           DHS-driven membership, matrices, and provenance
+  atlas.dhs-driven.signal-shaped.peaks.bed
+                                       contributor-aware signal boundaries
+  atlas.dhs-driven.aggregate-shape.bw   normalized aggregate shape signal
+  atlas.dhs-driven.signal-shape.tsv     per-element boundary diagnostics
+  atlas.dhs-driven.signal-shape.stats.json
+                                       shape parameters and summary counts
 
 qc/
   fastqc/raw/ and fastqc/trimmed/       per-FASTQ FastQC reports
@@ -295,8 +344,110 @@ primary peaks. The additional short-fragment branch uses MACS3 `-f BAM
 --nomodel --shift -75 --extsize 150 -q 0.10 --keep-dup all`, followed by a mean
 CPM floor of 2 and 50-400 bp geometry. CPM-refined scores are signal-derived;
 they are not q-values or an independent FDR estimate.
+Observed positive CPM cutoffs are evaluated from high to low. Qualifying
+high-signal modes expand as the cutoff falls; when a lower-signal bridge would
+merge established modes, the lower mode must have at least 25% prominence
+relative to the saddle: `(lower summit - saddle) / lower summit >= 0.25`.
+Shallower subdivisions are merged and continue expanding as one component;
+prominent modes retain their last separate boundaries. This can split a broad
+MACS3 candidate without treating small reproducible fluctuations as separate
+peaks or forcing every mode to the 50-bp minimum. The prominence threshold,
+algorithm identifier, and threshold rule are recorded in each refinement stats
+JSON.
 If a sample has no MACS3 candidates or no contained positive signal, refinement
 writes valid empty BED files and records the reason in the stats `status` field.
+
+### ATAC consensus and global atlas method
+
+The atlas branch is optional and valid only for paired-end ATAC. For each
+condition, it merges the already filtered `<150 bp` biological-replicate BAMs,
+recomputes the pooled Tn5-shifted CPM track, calls lenient MACS3 candidates, and
+applies the same CPM refinement. A pooled refined peak is retained when at
+least the configured number of biological replicates cover the configured
+fraction of its bases. The default is two replicates covering at least 50%.
+
+Across conditions, peaks are centered on their maximum pooled CPM bin and
+converted to fixed-width windows. Candidates are ranked by maximum-CPM
+percentile within each condition. The highest-ranked window is retained, all
+windows directly overlapping it are assigned to it and removed, and selection
+continues iteratively. Boundaries are never unioned, preventing overlap chains
+from creating large peaks. Tissue specificity is preserved in the membership,
+presence, coverage-fraction, and CPM matrices; a peak does not need to occur in
+multiple tissues. This is implemented in Python and uses the existing
+`atac_qc` environment—no ArchR or additional R packages are installed.
+
+`atlas.variable.peaks.bed` preserves the same atlas IDs but estimates biological
+boundaries from the assigned condition peaks. Each condition contributes at
+most one vote (its strongest assigned peak); the output uses the unweighted
+median start and end. A peak seen in one condition keeps that condition's
+boundaries. Direct overlaps between neighboring variable intervals are split
+midway only when both intervals remain at least 50 bp; otherwise both variable
+records are retained as overlapping evidence, without interval union or
+chaining. The fixed non-overlapping anchors remain the coordinate system for
+the quantitative matrices.
+
+The narrow-source-first comparison keeps the same 250-bp non-overlap rule but
+changes seed ordering. Original refined DHS width is considered before signal
+priority, so a broad DHS whose fixed window bridges two non-overlapping narrow
+DHS windows cannot eliminate both smaller modes. After anchors are selected,
+every source DHS is annotated to every retained 250-bp anchor its candidate
+window overlaps. A broad unresolved DHS can therefore support both smaller
+atlas elements. This is emitted under `atlas.narrow-first.*` and does not
+replace the canonical signal-prioritized fixed atlas.
+
+The DHS-support boundary model uses all replicate-supported condition DHSs,
+independently of ATAC coverage amplitude. Overlapping DHSs are first unioned
+within each condition, so a condition contributes at most one vote per base.
+`atlas.dhs-support-fraction.bw` is the resulting number of supporting
+conditions divided by the total number of conditions. For each fixed 250-bp
+anchor, the method selects the maximum support inside the anchor nearest its
+center, calculates `ceil(maximum / 2)`, and reports the connected support
+component containing that maximum as `atlas.fwhm-boundaries.bed`. Consequently,
+a tissue-specific element is not diluted by absent tissues: support one has a
+half-maximum requirement of one. No width cap, interval merge, or forced
+neighbor split is applied. Components that reach another anchor or bridge to a
+higher-support peak are retained and explicitly flagged in the diagnostics.
+Because the input is a discrete condition-support track, this is a
+half-maximum support width rather than classical FWHM of a smooth signal.
+
+The center-mode alternative addresses adjacent support peaks without changing
+the support track or fixed anchors. It identifies local DHS-support maxima
+inside each anchor, selects the mode nearest the anchor center even when it is
+lower than another mode, and measures that mode at half prominence. Prominence
+uses the higher of the left and right valley bases encountered before a taller
+peak or a zero-support gap. This raises the contour above an intervening valley
+and prevents the selected smaller mode from inheriting a connected taller
+neighbor. It is emitted separately for direct comparison with ordinary FWHM.
+
+The parallel DHS-driven atlas starts from the same tissue consensus DHSs but
+does not use fixed windows to establish membership. The strongest remaining DHS
+is a seed; another DHS joins it only when the original intervals overlap and
+the summit of either DHS lies inside the other interval. Members never recruit
+additional members, so an overlap chain cannot bridge two seeds. Median
+condition boundaries define `atlas.dhs-driven.peaks.bed`; 250-bp measurement
+anchors are created only afterward. Separate membership, CPM, coverage, and
+presence outputs allow direct comparison with the fixed-window grouping.
+
+The final signal-shaping step keeps this DHS-driven membership unchanged. For
+each atlas element, it selects the strongest assigned DHS per contributing
+condition and extracts that condition's pooled short-fragment CPM profile in a
+1-kb window. Profiles are binned at 10 bp, smoothed over 30 bp, divided by
+their maximum inside the assigned source DHS (and capped at 1), and combined
+with an equal-weight median. The selected aggregate summit must also overlap a
+contributing source DHS, preventing a stronger neighboring element from
+capturing the boundary. Thus a
+tissue-specific element uses its one observed tissue and is not diluted by
+zero signal from other tissues; no tissue gains extra weight from sequencing
+depth or additional source peaks. The boundary is the component containing the
+aggregate maximum above both 20% of that maximum and a robust local-background
+threshold (median + 3 scaled MAD), constrained to 50-400 bp. Strong secondary
+modes are reported in `atlas.dhs-driven.signal-shape.tsv` but are not bridged
+into the primary element.
+
+`atlas.dhs-driven.aggregate-shape.bw` records the locally normalized aggregate
+used for boundary selection (range 0-1 within shaped elements). It is a shape
+comparison track, not CPM and not a pooled read-depth measurement. Absolute
+per-condition CPM remains in the condition BigWigs and atlas CPM matrices.
 
 ### Build an IGV session
 
@@ -313,8 +464,35 @@ mamba run --prefix "$PWD/.venv" \
   --genome dm6
 ```
 
+Add narrow-source-first anchors and boundaries, the condition DHS-support
+track, ordinary FWHM, center-mode half-prominence boundaries, DHS-driven
+anchors, median DHS boundaries, contributor-normalized aggregate signal, and
+signal-shaped boundaries with:
+
+```bash
+mamba run --prefix "$PWD/.venv" \
+  python src/build_igv_session.py \
+  results/atlas-atac-dm6/hmmratac/atac_atlas \
+  --condition-atlas --include-dhs-driven \
+  --output results/atlas-atac-dm6/hmmratac/atac_atlas/atlas-dhs-driven-comparison.igv.xml \
+  --genome dm6
+```
+
 The XML uses paths relative to the session file, so move the session and its
 track files together.
+
+For the pooled condition atlas, create a session containing each condition's
+ATAC CPM signal and replicate-supported consensus peaks, followed by the fixed
+and variable global atlas tracks:
+
+```bash
+mamba run --prefix "$PWD/.venv" \
+  python src/build_igv_session.py \
+  results/atlas-atac-dm6/hmmratac/atac_atlas \
+  --condition-atlas \
+  --output results/atlas-atac-dm6/hmmratac/atac_atlas/atlas-condition-consensus.igv.xml \
+  --genome dm6
+```
 
 ## Run on SLURM
 

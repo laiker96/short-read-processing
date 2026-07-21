@@ -63,6 +63,14 @@ def main() -> int:
     parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--snakemake-dry-run", action="store_true")
     parser.add_argument(
+        "--atac-atlas-condition-map",
+        type=Path,
+        help="Enable the optional ATAC atlas stage using this condition-map TSV",
+    )
+    parser.add_argument("--atac-atlas-peak-width", type=int, default=250)
+    parser.add_argument("--atac-atlas-minimum-replicates", type=int, default=2)
+    parser.add_argument("--atac-atlas-overlap-fraction", type=float, default=0.5)
+    parser.add_argument(
         "--snakemake-arg",
         action="append",
         default=[],
@@ -104,6 +112,10 @@ def main() -> int:
         path_base=REPO_ROOT,
         require_fastq_files=True,
         schema_path=args.schema.resolve(),
+        atac_atlas_condition_map=args.atac_atlas_condition_map,
+        atac_atlas_peak_width=args.atac_atlas_peak_width,
+        atac_atlas_minimum_replicates=args.atac_atlas_minimum_replicates,
+        atac_atlas_overlap_fraction=args.atac_atlas_overlap_fraction,
     )
     for config_path in configs:
         print(f"Resolved workflow config: {config_path}")

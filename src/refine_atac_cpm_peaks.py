@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--minimum-length", type=int, default=50)
     parser.add_argument("--maximum-length", type=int, default=400)
     parser.add_argument("--minimum-mean-cpm", type=float, default=0.0)
+    parser.add_argument("--minimum-mode-prominence", type=float, default=0.25)
     args = parser.parse_args()
     refine_cpm_bigwig(
         peaks=args.peaks,
@@ -31,6 +32,7 @@ def main() -> int:
         minimum_length=args.minimum_length,
         maximum_length=args.maximum_length,
         minimum_mean_cpm=args.minimum_mean_cpm,
+        minimum_mode_prominence=args.minimum_mode_prominence,
     )
     return 0
 

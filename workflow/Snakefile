@@ -13,6 +13,7 @@ from short_read_processing.workflow_config import (
     validate_workflow_config,
     wildcard_regex,
 )
+from short_read_processing.atlas import read_condition_map
 
 
 if not config:
@@ -43,6 +44,7 @@ ATAC_REFINEMENT = config.get(
         "macs3_extsize": 150,
         "bigwig_bin_size": 10,
         "minimum_mean_cpm": 2.0,
+        "minimum_mode_prominence": 0.25,
         "merge_gap_bp": 1,
         "minimum_length": 50,
         "maximum_length": 400,
@@ -55,10 +57,27 @@ ATAC_REFINEMENT_SAMPLES = [
     and SAMPLES[sample]["layout"] == "paired"
     and ATAC_REFINEMENT["enabled"]
 ]
+ATAC_ATLAS = config.get("atac_atlas", {"enabled": False})
+ATAC_ATLAS_ENABLED = bool(ATAC_ATLAS.get("enabled"))
+ATAC_ATLAS_CONDITION_SPECS = (
+    read_condition_map(
+        Path(ATAC_ATLAS["condition_map"]),
+        sample_ids=ATAC_REFINEMENT_SAMPLES,
+        minimum_replicates=int(ATAC_ATLAS["minimum_replicates"]),
+    )
+    if ATAC_ATLAS_ENABLED
+    else []
+)
+ATAC_ATLAS_CONDITIONS = {
+    specification.condition_id: specification
+    for specification in ATAC_ATLAS_CONDITION_SPECS
+}
+ATAC_ATLAS_CONDITION_IDS = list(ATAC_ATLAS_CONDITIONS)
 
 SAMPLE_RE = wildcard_regex(SAMPLE_IDS)
 ATAC_RE = wildcard_regex(ATAC_SAMPLES)
 ATAC_REFINEMENT_RE = wildcard_regex(ATAC_REFINEMENT_SAMPLES)
+ATAC_ATLAS_CONDITION_RE = wildcard_regex(ATAC_ATLAS_CONDITION_IDS)
 CHIP_TREATMENT_RE = wildcard_regex(CHIP_TREATMENTS)
 CHIP_CONTROLLED_TREATMENT_RE = wildcard_regex(CHIP_CONTROLLED_TREATMENTS)
 
@@ -171,6 +190,96 @@ ATAC_FRAGMENT_METRICS = {
     sample: f"{ATAC_REFINEMENT_ROOT}/qc/{sample}.fragment-filter.tsv"
     for sample in ATAC_REFINEMENT_SAMPLES
 }
+ATAC_ATLAS_ROOT = f"{RESULT_ROOT}/atac_atlas"
+ATAC_ATLAS_CONDITION_SHORT_BAMS = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/bam/{condition}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONDITION_SHORT_BAIS = {
+    condition: ATAC_ATLAS_CONDITION_SHORT_BAMS[condition] + ".bai"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONDITION_BIGWIGS = {
+    condition: (
+        f"{ATAC_ATLAS_ROOT}/conditions/{condition}/tracks/{condition}.fragments-lt"
+        f"{ATAC_FRAGMENT_MAXIMUM}.Tn5-shifted.CPM.bw"
+    )
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONDITION_MACS_PEAKS = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/macs3/{condition}_peaks.narrowPeak"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONDITION_MACS_BEDGRAPHS = [
+    f"{ATAC_ATLAS_ROOT}/conditions/{condition}/macs3/{condition}_{suffix}.bdg"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+    for suffix in ("treat_pileup", "control_lambda")
+]
+ATAC_ATLAS_CONDITION_POOLED_REFINED = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/refined/{condition}.pooled.CPM-refined.bed"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONDITION_POOLED_EXCLUDED = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/refined/{condition}.pooled.Excluded.bed"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONDITION_POOLED_STATS = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/refined/{condition}.pooled.stats.json"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONSENSUS_PEAKS = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/{condition}.consensus.bed"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONSENSUS_SUPPORT = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/{condition}.support.tsv"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_CONSENSUS_STATS = {
+    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/{condition}.consensus.stats.json"
+    for condition in ATAC_ATLAS_CONDITION_IDS
+}
+ATAC_ATLAS_OUTPUTS = (
+    [
+        f"{ATAC_ATLAS_ROOT}/atlas.peaks.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.variable.peaks.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.membership.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.presence.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.coverage_fraction.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.mean_cpm.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.maximum_cpm.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.stats.json",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.anchors250.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.variable.peaks.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.membership.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.presence.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.coverage_fraction.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.mean_cpm.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.maximum_cpm.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.stats.json",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-support-fraction.bw",
+        f"{ATAC_ATLAS_ROOT}/atlas.fwhm-boundaries.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.fwhm-diagnostics.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.fwhm.stats.json",
+        f"{ATAC_ATLAS_ROOT}/atlas.center-mode-half-prominence-boundaries.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.center-mode-half-prominence-diagnostics.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.center-mode-half-prominence.stats.json",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.anchors250.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.peaks.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.membership.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.presence.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.coverage_fraction.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.mean_cpm.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.maximum_cpm.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.stats.json",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.signal-shaped.peaks.bed",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.aggregate-shape.bw",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.signal-shape.tsv",
+        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.signal-shape.stats.json",
+    ]
+    if ATAC_ATLAS_ENABLED
+    else []
+)
 
 CALLPEAK_NARROW = [
     sample for sample in TREATMENTS
@@ -269,6 +378,16 @@ FINAL_TARGETS = (
     + list(ATAC_REFINEMENT_EXCLUDED.values())
     + list(ATAC_REFINEMENT_STATS.values())
     + list(ATAC_FRAGMENT_METRICS.values())
+    + list(ATAC_ATLAS_CONDITION_BIGWIGS.values())
+    + list(ATAC_ATLAS_CONDITION_MACS_PEAKS.values())
+    + ATAC_ATLAS_CONDITION_MACS_BEDGRAPHS
+    + list(ATAC_ATLAS_CONDITION_POOLED_REFINED.values())
+    + list(ATAC_ATLAS_CONDITION_POOLED_EXCLUDED.values())
+    + list(ATAC_ATLAS_CONDITION_POOLED_STATS.values())
+    + list(ATAC_ATLAS_CONSENSUS_PEAKS.values())
+    + list(ATAC_ATLAS_CONSENSUS_SUPPORT.values())
+    + list(ATAC_ATLAS_CONSENSUS_STATS.values())
+    + ATAC_ATLAS_OUTPUTS
     + list(PEAKS.values())
     + CALLPEAK_BEDGRAPHS
     + list(FRIP_TSV.values())
@@ -293,4 +412,5 @@ include: "rules/read_processing.smk"
 include: "rules/alignment.smk"
 include: "rules/peaks.smk"
 include: "rules/atac_refinement.smk"
+include: "rules/atac_atlas.smk"
 include: "rules/qc.smk"

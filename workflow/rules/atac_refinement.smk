@@ -139,14 +139,18 @@ rule call_lenient_atac_short_fragment_peaks:
 rule refine_atac_short_fragment_cpm:
     input:
         peaks=lambda wc: ATAC_LENIENT_PEAKS[wc.sample],
-        signal=lambda wc: ATAC_SHORT_BIGWIGS[wc.sample]
+        signal=lambda wc: ATAC_SHORT_BIGWIGS[wc.sample],
+        script=str(REPO_ROOT / "src" / "refine_atac_cpm_peaks.py"),
+        implementation=str(
+            REPO_ROOT / "src" / "short_read_processing" / "cpm_refinement.py"
+        )
     output:
         refined=f"{ATAC_REFINEMENT_ROOT}/refined/{{sample}}.CPM-refined.bed",
         excluded=f"{ATAC_REFINEMENT_ROOT}/refined/{{sample}}.Excluded.bed",
         stats=f"{ATAC_REFINEMENT_ROOT}/refined/{{sample}}.stats.json"
     params:
-        script=str(REPO_ROOT / "src" / "refine_atac_cpm_peaks.py"),
         minimum_mean_cpm=float(ATAC_REFINEMENT["minimum_mean_cpm"]),
+        minimum_mode_prominence=float(ATAC_REFINEMENT["minimum_mode_prominence"]),
         merge_gap_bp=int(ATAC_REFINEMENT["merge_gap_bp"]),
         minimum_length=int(ATAC_REFINEMENT["minimum_length"]),
         maximum_length=int(ATAC_REFINEMENT["maximum_length"])
@@ -160,9 +164,10 @@ rule refine_atac_short_fragment_cpm:
         f"{ATAC_REFINEMENT_ROOT}/logs/refined/{{sample}}.log"
     shell:
         "mkdir -p $(dirname {output.refined:q}) $(dirname {log:q}) && "
-        "python {params.script:q} --peaks {input.peaks:q} "
+        "python {input.script:q} --peaks {input.peaks:q} "
         "--signal-bigwig {input.signal:q} --output {output.refined:q} "
         "--excluded {output.excluded:q} --stats {output.stats:q} "
         "--merge-gap-bp {params.merge_gap_bp} --minimum-length {params.minimum_length} "
         "--maximum-length {params.maximum_length} "
-        "--minimum-mean-cpm {params.minimum_mean_cpm} > {log:q} 2>&1"
+        "--minimum-mean-cpm {params.minimum_mean_cpm} "
+        "--minimum-mode-prominence {params.minimum_mode_prominence} > {log:q} 2>&1"

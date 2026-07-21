@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from short_read_processing.accessions import AcquisitionError
+from short_read_processing.atlas import read_condition_map
 from short_read_processing.sample_sheet import read_sample_sheet
 from write_atlas_atac_sample_sheet import selected_sample_rows as selected_atac_rows
 from write_atlas_h3k27ac_sample_sheet import selected_sample_rows as selected_h3k27ac_rows
@@ -80,6 +81,22 @@ def test_atlas_selected_rows_preserve_biological_and_technical_replicates():
         "wid_atac_rep1",
         "wid_atac_rep2",
     }
+
+
+def test_curated_atac_condition_map_covers_every_biological_library_once():
+    resources = Path(__file__).parents[1] / "resources"
+    rows = selected_atac_rows(resources / "atlas_atac_seq_metadata.tsv")
+    sample_ids = {str(row["sample_id"]) for row in rows}
+
+    conditions = read_condition_map(
+        resources / "atlas_atac_conditions.tsv",
+        sample_ids=sample_ids,
+        minimum_replicates=2,
+    )
+
+    assert len(conditions) == 9
+    assert sum(len(condition.samples) for condition in conditions) == 22
+    assert {sample for condition in conditions for sample in condition.samples} == sample_ids
 
 
 def test_atlas_h3k27ac_selected_rows_are_ip_only():

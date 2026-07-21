@@ -33,7 +33,7 @@ def _run_plan(root: Path, requested: str, run: str, layout: str = "PAIRED") -> R
     )
 
 
-def _generate(tmp_path: Path, plans: list[RunPlan], sheet_text: str):
+def _generate(tmp_path: Path, plans: list[RunPlan], sheet_text: str, **kwargs):
     manifest = tmp_path / "manifest.tsv"
     write_manifest(manifest, plans)
     sheet = tmp_path / "samples.tsv"
@@ -47,6 +47,7 @@ def _generate(tmp_path: Path, plans: list[RunPlan], sheet_text: str):
         reference_root=tmp_path / "references",
         path_base=tmp_path,
         require_fastq_files=True,
+        **kwargs,
     )
 
 
@@ -85,6 +86,7 @@ def test_atac_defaults_to_hmmratac_and_groups_technical_runs(tmp_path):
         "macs3_extsize": 150,
         "bigwig_bin_size": 10,
         "minimum_mean_cpm": 2.0,
+        "minimum_mode_prominence": 0.25,
         "merge_gap_bp": 1,
         "minimum_length": 50,
         "maximum_length": 400,
@@ -135,6 +137,40 @@ def test_atac_callpeak_shift_override_writes_bedgraphs(tmp_path):
     assert peak["spmr"] is True
     assert peak["bedgraph_outputs"]["treatment_suffix"] == "_treat_pileup.bdg"
     assert peak["bedgraph_outputs"]["control_suffix"] == "_control_lambda.bdg"
+
+
+def test_atac_atlas_condition_map_enables_optional_config(tmp_path):
+    plans = [
+        _run_plan(tmp_path / "raw", "SRR123456", "SRR123456"),
+        _run_plan(tmp_path / "raw", "SRR123457", "SRR123457"),
+    ]
+    sheet = (
+        HEADER
+        + "\nSRR123456\tatac_rep1\tatac\tdm6\ttreatment\t\t1\t"
+        + "\nSRR123457\tatac_rep2\tatac\tdm6\ttreatment\t\t2\t\n"
+    )
+    condition_map = tmp_path / "conditions.tsv"
+    condition_map.write_text(
+        "condition_id\tcondition_label\tsample_id\n"
+        "embryo\tEmbryo\tatac_rep1\n"
+        "embryo\tEmbryo\tatac_rep2\n"
+    )
+
+    output = _generate(
+        tmp_path,
+        plans,
+        sheet,
+        atac_atlas_condition_map=condition_map,
+    )[0]
+    atlas = yaml.safe_load(output.read_text())["atac_atlas"]
+
+    assert atlas == {
+        "enabled": True,
+        "condition_map": "conditions.tsv",
+        "peak_width": 250,
+        "minimum_replicates": 2,
+        "replicate_overlap_fraction": 0.5,
+    }
 
 
 def test_histone_callpeak_is_broad_and_resolves_control(tmp_path):

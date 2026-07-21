@@ -37,9 +37,34 @@ names, or sample relationships.
 - The canonical paired-end ATAC refinement branch retains proper pairs with
   `0 < abs(TLEN) < 150`, creates a Tn5-shifted CPM BigWig, calls lenient MACS3
   candidates with `-f BAM --nomodel --shift -75 --extsize 150 -q 0.10`, and
-  refines 50-400 bp intervals at mean CPM >= 2.
+  refines 50-400 bp intervals at mean CPM >= 2. CPM thresholds are evaluated
+  from high to low. Modes separated by at least 25% relative saddle prominence
+  retain their last separate qualifying boundaries; shallower subdivisions
+  merge and continue expanding as one component.
 - CPM-refined peaks are signal-derived and must not be described as q-values or
   independently FDR-controlled calls.
+- The optional ATAC atlas uses an explicit condition map. Within conditions,
+  pooled refined peaks require configured biological-replicate coverage.
+  Across conditions, fixed-width summit windows undergo iterative overlap
+  removal; never replace this with raw interval union/`bedtools merge` chaining.
+- Cross-condition atlas presence, peak coverage, and CPM are separate matrices;
+  a tissue-specific peak does not require support from another tissue.
+- Contributor-aware signal shaping is downstream of DHS-seed grouping and must
+  not change membership. Use at most one pooled profile per contributing
+  condition, normalize profiles locally, and weight contributing conditions
+  equally; absent conditions do not contribute zeros. Constrain each shaped
+  summit to a contributing source DHS so neighboring elements cannot capture it.
+- The fixed-atlas FWHM model uses all condition consensus DHSs but unions them
+  within each condition before counting support. FWHM is the connected
+  half-maximum condition-support component associated with the fixed anchor;
+  do not substitute raw DHS-record counts or pooled CPM signal.
+- Keep the narrow-source-first atlas as a comparison branch. It prioritizes
+  original DHS width before signal when selecting non-overlapping 250-bp
+  anchors and may annotate a broad bridging source to multiple retained anchors;
+  do not silently replace the canonical signal-prioritized fixed atlas.
+- Keep center-mode half-prominence boundaries separate from ordinary FWHM:
+  select the local support mode nearest the anchor center and use its valley
+  prominence rather than silently replacing the highest-support result.
 - TF ChIP defaults to narrow MACS3 peaks; histone ChIP defaults to broad peaks.
 - ChIP controls are explicit sample-sheet relationships. IP-only ChIP is valid
   but must be labeled as such and runs MACS3 without `-c`.

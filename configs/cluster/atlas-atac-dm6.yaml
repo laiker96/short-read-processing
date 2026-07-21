@@ -700,3 +700,21 @@ provenance:
   sample_sheet: resources/atlas_atac_selected.sample_sheet.tsv
   sample_sheet_schema: schemas/sample-sheet.schema.yaml
   download_manifest: data/raw/atlas_atac/download_manifest.tsv
+atac_refinement:
+  enabled: true
+  fragment_maximum: 150
+  macs3_qvalue: 0.1
+  macs3_shift: -75
+  macs3_extsize: 150
+  bigwig_bin_size: 10
+  minimum_mean_cpm: 2.0
+  minimum_mode_prominence: 0.25
+  merge_gap_bp: 1
+  minimum_length: 50
+  maximum_length: 400
+atac_atlas:
+  enabled: true
+  condition_map: resources/atlas_atac_conditions.tsv
+  peak_width: 250
+  minimum_replicates: 2
+  replicate_overlap_fraction: 0.5

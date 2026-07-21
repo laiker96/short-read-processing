@@ -11,7 +11,10 @@ fragment-level FRiP, ATAC TSS/fragment QC, ChIP fingerprint/cross-correlation,
 stable metrics, and MultiQC. All valid assay/caller/layout branches have
 synthetic dry-run tests. Generated dm6/hg38 configs prepare checksum-pinned
 FASTA, annotation, blacklist, TSS, autosome, chromosome-size, and Bowtie2 index
-assets inside the DAG. Full real-data execution is still pending.
+assets inside the DAG. The paired-end ATAC branch also supports an optional
+explicitly mapped atlas stage with within-condition replicate consensus and
+fixed-width iterative overlap removal across conditions. A real dm6 ATAC
+sample has completed HMMRATAC and short-fragment refinement validation.
 
 ## Scope and decisions
 
@@ -244,9 +247,11 @@ auditable.
    profile, rerun tests after parameter changes, and a documented small
    end-to-end example for both genomes. Generate a platform lock/explicit package
    list after the workflow tests pass.
-6. **Later, replicate analysis:** add pooled/consensus peaks and IDR for suitable
-   narrow-peak assays, plus broad-mark overlap/reproducibility. Keep this outside
-   v1 unless replicate-level inference is explicitly requested.
+6. **ATAC replicate/atlas analysis:** pooled condition candidates, biological-
+   replicate coverage support, bounded cross-condition peak selection, and
+   condition presence/coverage/CPM matrices are implemented as an optional DAG
+   branch. IDR remains reserved for suitable ranked narrow-peak outputs and is
+   not applied to CPM-refined scores.
 
 Acceptance for v1 is an end-to-end synthetic test for all valid assay/layout/
 caller branches, a small real-data smoke test for `dm6` and `hg38`, consistent

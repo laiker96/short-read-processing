@@ -79,6 +79,7 @@ ATAC_REFINEMENT_DEFAULTS = {
     "macs3_extsize": 150,
     "bigwig_bin_size": 10,
     "minimum_mean_cpm": 2.0,
+    "minimum_mode_prominence": 0.25,
     "merge_gap_bp": 1,
     "minimum_length": 50,
     "maximum_length": 400,
@@ -280,6 +281,10 @@ def generate_configs(
     path_base: Path,
     require_fastq_files: bool,
     schema_path: Path = DEFAULT_SCHEMA,
+    atac_atlas_condition_map: Path | None = None,
+    atac_atlas_peak_width: int = 250,
+    atac_atlas_minimum_replicates: int = 2,
+    atac_atlas_overlap_fraction: float = 0.5,
 ) -> list[Path]:
     project = _safe_id(project, "project ID")
     run_id = _safe_id(run_id, "run ID")
@@ -323,6 +328,10 @@ def generate_configs(
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for item in prepared:
         groups[(str(item["assay"]), str(item["genome"]))].append(item)
+    if atac_atlas_condition_map is not None and not any(
+        assay == "atac" for assay, _genome in groups
+    ):
+        raise AcquisitionError("--atac-atlas-condition-map requires ATAC samples")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_paths: list[Path] = []
@@ -372,6 +381,36 @@ def generate_configs(
         }
         if assay == "atac":
             config["atac_refinement"] = dict(ATAC_REFINEMENT_DEFAULTS)
+            if atac_atlas_condition_map is not None:
+                from .atlas import read_condition_map
+
+                condition_map = atac_atlas_condition_map.resolve()
+                if not condition_map.is_file():
+                    raise AcquisitionError(
+                        f"ATAC atlas condition map does not exist: {condition_map}"
+                    )
+                if any(item["layout"] != "paired" for item in items):
+                    raise AcquisitionError(
+                        "The ATAC atlas stage requires paired-end biological libraries"
+                    )
+                read_condition_map(
+                    condition_map,
+                    sample_ids=sample_ids,
+                    minimum_replicates=atac_atlas_minimum_replicates,
+                )
+                if atac_atlas_peak_width < 1:
+                    raise AcquisitionError("ATAC atlas peak width must be positive")
+                if not 0 < atac_atlas_overlap_fraction <= 1:
+                    raise AcquisitionError(
+                        "ATAC atlas overlap fraction must be in (0, 1]"
+                    )
+                config["atac_atlas"] = {
+                    "enabled": True,
+                    "condition_map": _display_path(condition_map, path_base),
+                    "peak_width": atac_atlas_peak_width,
+                    "minimum_replicates": atac_atlas_minimum_replicates,
+                    "replicate_overlap_fraction": atac_atlas_overlap_fraction,
+                }
         output_path = output_dir / f"{group_project}.yaml"
         _write_config_if_changed(output_path, config)
         output_paths.append(output_path.resolve())
