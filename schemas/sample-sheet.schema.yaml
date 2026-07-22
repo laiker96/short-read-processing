@@ -1,6 +1,6 @@
-schema_version: 1
+schema_version: 2
 name: short-read-processing sample sheet
-row_model: One row is one public run or experiment accession. Rows with the same sample_id are technical runs of one biological library.
+row_model: One row is one public run or experiment accession. Rows with the same library_id are technical runs of one biological library.
 formats:
   - tsv
   - csv
@@ -8,47 +8,43 @@ allow_extra_columns: true
 
 required_columns:
   - accession
-  - sample_id
+  - library_id
   - assay
-  - genome
-  - role
-  - control_id
-  - replicate
-  - peak_caller
+  - context
 
 fields:
   accession:
     type: accession
     pattern: '^(SRR|SRX|ERR|ERX)[0-9]+$'
     description: Public run or experiment accession. Experiment accessions expand to all runs.
-  sample_id:
+  library_id:
     type: string
     pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
     description: Biological library ID. Repeat it to merge technical runs before alignment.
   assay:
     type: enum
-    values: [atac, chip_tf, chip_histone]
-  genome:
-    type: enum
-    values: [dm6, hg38]
+    values: [atac, h3k27ac, chip_tf, chip_histone]
+    description: Use h3k27ac for histone H3K27ac ChIP-seq; chip_histone remains an accepted alias.
+  context:
+    type: string
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    description: Tissue, stage, or cell-type ID. Distinct ATAC libraries in one context are biological replicates.
   role:
     type: enum
     values: [treatment, control]
-    default: treatment
-  control_id:
-    type: string
     allow_blank: true
-    description: Optional sample_id of the matched ChIP input/control; blank for IP-only ChIP, ATAC, and control rows.
-  replicate:
-    type: integer
-    minimum: 1
-    default: 1
+    default: treatment
+  control_library:
+    type: string
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    allow_blank: true
+    description: Optional library_id of the matched ChIP input; blank for IP-only ChIP, ATAC, and control rows.
   peak_caller:
     type: enum
     values: [hmmratac, callpeak]
     allow_blank: true
     defaults_by_assay:
-      atac: hmmratac
+      atac: callpeak
       chip_tf: callpeak
       chip_histone: callpeak
 
@@ -62,7 +58,10 @@ fields:
     exclusive_minimum: 0
     maximum: 1
     allow_blank: true
-    default: 0.01
+    defaults_by_assay:
+      atac: 0.10
+      chip_tf: 0.01
+      chip_histone: 0.01
   macs3_broad:
     type: boolean
     allow_blank: true
@@ -79,14 +78,21 @@ fields:
   macs3_nomodel:
     type: boolean
     allow_blank: true
-    default: false
+    defaults_by_assay:
+      atac: true
+      chip_tf: false
+      chip_histone: false
   macs3_shift:
     type: integer
     allow_blank: true
+    defaults_by_assay:
+      atac: -75
   macs3_extsize:
     type: integer
     minimum: 1
     allow_blank: true
+    defaults_by_assay:
+      atac: 150
 
   hmmratac_lower:
     type: number
@@ -156,15 +162,16 @@ fields:
 
 cross_field_rules:
   - Each accession must appear exactly once in the sheet.
-  - ATAC rows must have role=treatment and a blank control_id.
-  - A nonblank ChIP treatment control_id must name an existing role=control sample_id.
-  - ChIP control rows must have a blank control_id.
+  - Rows sharing library_id are technical runs and must have identical context, assay, role, control_library, and processing fields.
+  - Distinct ATAC library_id values in one context are biological replicates and are pooled automatically.
+  - ATAC rows must have role=treatment and a blank control_library.
+  - A nonblank ChIP treatment control_library must name an existing role=control library_id in the same context and assay.
+  - ChIP control rows must have a blank control_library.
   - HMMRATAC is valid only for paired-end ATAC after accession resolution.
   - MACS3-only columns must be blank when peak_caller=hmmratac.
-  - macs3_shift or macs3_extsize requires macs3_format=BAM and resolves macs3_nomodel=true.
-  - All rows sharing sample_id must have identical biological and processing fields.
-
-resolved_callpeak_outputs:
+  - ATAC callpeak always uses a two-ended Tn5 insertion BED, unscaled MACS3 pileup/local lambda, and qpois refinement.
+  - ChIP macs3_shift or macs3_extsize requires macs3_format=BAM and resolves macs3_nomodel=true.
+resolved_chip_callpeak_outputs:
   flags: [-B, --SPMR]
-  treatment_bedgraph: '{sample_id}_treat_pileup.bdg'
-  control_bedgraph: '{sample_id}_control_lambda.bdg'
+  treatment_bedgraph: '{library_id}_treat_pileup.bdg'
+  control_bedgraph: '{library_id}_control_lambda.bdg'

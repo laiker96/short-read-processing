@@ -19,15 +19,10 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("configs"))
     parser.add_argument("--project", default="short-read")
     parser.add_argument("--run-id", default="baseline")
+    parser.add_argument("--genome", choices=("dm6", "hg38"), default="dm6")
     parser.add_argument("--reference-root", type=Path, default=Path("references"))
-    parser.add_argument(
-        "--atac-atlas-condition-map",
-        type=Path,
-        help="Enable the optional ATAC atlas stage using this condition-map TSV",
-    )
-    parser.add_argument("--atac-atlas-peak-width", type=int, default=250)
-    parser.add_argument("--atac-atlas-minimum-replicates", type=int, default=2)
-    parser.add_argument("--atac-atlas-overlap-fraction", type=float, default=0.5)
+    parser.add_argument("--atac-minimum-replicates", type=int, default=2)
+    parser.add_argument("--atac-overlap-fraction", type=float, default=0.5)
     parser.add_argument(
         "--path-base",
         type=Path,
@@ -51,10 +46,9 @@ def main() -> int:
         path_base=args.path_base,
         require_fastq_files=not args.allow_missing_fastqs,
         schema_path=args.schema,
-        atac_atlas_condition_map=args.atac_atlas_condition_map,
-        atac_atlas_peak_width=args.atac_atlas_peak_width,
-        atac_atlas_minimum_replicates=args.atac_atlas_minimum_replicates,
-        atac_atlas_overlap_fraction=args.atac_atlas_overlap_fraction,
+        genome=args.genome,
+        atac_minimum_replicates=args.atac_minimum_replicates,
+        atac_overlap_fraction=args.atac_overlap_fraction,
     )
     for output in outputs:
         print(output)

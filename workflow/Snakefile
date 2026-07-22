@@ -8,12 +8,12 @@ from urllib.parse import urlparse
 REPO_ROOT = Path(workflow.basedir).parent.resolve()
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from short_read_processing.consensus import condition_specs
 from short_read_processing.workflow_config import (
     resolve_input_paths,
     validate_workflow_config,
     wildcard_regex,
 )
-from short_read_processing.atlas import read_condition_map
 
 
 if not config:
@@ -28,56 +28,100 @@ RESULT_ROOT = str(Path(config["output_dir"]) / PROJECT / RUN_ID)
 WORK_ROOT = str(Path("work") / PROJECT / RUN_ID)
 SAMPLES = {str(sample["id"]): sample for sample in config["samples"]}
 SAMPLE_IDS = list(SAMPLES)
-TREATMENTS = [sample_id for sample_id in SAMPLE_IDS if SAMPLES[sample_id]["role"] == "treatment"]
+TREATMENTS = [sample for sample in SAMPLE_IDS if SAMPLES[sample]["role"] == "treatment"]
 CHIP_TREATMENTS = TREATMENTS if ASSAY.startswith("chip") else []
 CHIP_CONTROLLED_TREATMENTS = [
     sample for sample in CHIP_TREATMENTS if SAMPLES[sample].get("control")
 ]
-ATAC_SAMPLES = SAMPLE_IDS if ASSAY == "atac" else []
-ATAC_REFINEMENT = config.get(
-    "atac_refinement",
+ATAC_SAMPLES = TREATMENTS if ASSAY == "atac" else []
+ATAC_QPOIS_SAMPLES = [
+    sample
+    for sample in ATAC_SAMPLES
+    if SAMPLES[sample]["peak_caller"]["command"] == "callpeak"
+]
+ATAC_QPOIS_PE_SAMPLES = [
+    sample for sample in ATAC_QPOIS_SAMPLES if SAMPLES[sample]["layout"] == "paired"
+]
+HMMRATAC_SAMPLES = [
+    sample
+    for sample in ATAC_SAMPLES
+    if SAMPLES[sample]["peak_caller"]["command"] == "hmmratac"
+]
+
+ATAC_QPOIS = config.get(
+    "atac_qpois",
     {
-        "enabled": True,
         "fragment_maximum": 150,
-        "macs3_qvalue": 0.10,
-        "macs3_shift": -75,
-        "macs3_extsize": 150,
-        "bigwig_bin_size": 10,
-        "minimum_mean_cpm": 2.0,
-        "minimum_mode_prominence": 0.25,
-        "merge_gap_bp": 1,
+        "minimum_exponent": 2,
+        "maximum_exponent": 325,
+        "merge_gap": 1,
         "minimum_length": 50,
         "maximum_length": 400,
     },
 )
-ATAC_REFINEMENT_SAMPLES = [
-    sample
-    for sample in TREATMENTS
-    if ASSAY == "atac"
-    and SAMPLES[sample]["layout"] == "paired"
-    and ATAC_REFINEMENT["enabled"]
-]
-ATAC_ATLAS = config.get("atac_atlas", {"enabled": False})
-ATAC_ATLAS_ENABLED = bool(ATAC_ATLAS.get("enabled"))
-ATAC_ATLAS_CONDITION_SPECS = (
-    read_condition_map(
-        Path(ATAC_ATLAS["condition_map"]),
-        sample_ids=ATAC_REFINEMENT_SAMPLES,
-        minimum_replicates=int(ATAC_ATLAS["minimum_replicates"]),
+ATAC_CONSENSUS = config.get("atac_consensus", {"enabled": False})
+ATAC_CONSENSUS_ENABLED = bool(ATAC_CONSENSUS.get("enabled"))
+ATAC_CONDITION_SPECS = (
+    condition_specs(
+        ATAC_CONSENSUS["conditions"],
+        sample_ids=ATAC_SAMPLES,
+        minimum_replicates=int(ATAC_CONSENSUS["minimum_replicates"]),
     )
-    if ATAC_ATLAS_ENABLED
+    if ATAC_CONSENSUS_ENABLED
     else []
 )
-ATAC_ATLAS_CONDITIONS = {
-    specification.condition_id: specification
-    for specification in ATAC_ATLAS_CONDITION_SPECS
-}
-ATAC_ATLAS_CONDITION_IDS = list(ATAC_ATLAS_CONDITIONS)
+ATAC_CONDITIONS = {spec.condition_id: spec for spec in ATAC_CONDITION_SPECS}
+ATAC_CONDITION_METHOD = {}
+for condition, specification in ATAC_CONDITIONS.items():
+    methods = {
+        SAMPLES[sample]["peak_caller"]["command"] for sample in specification.samples
+    }
+    layouts = {SAMPLES[sample]["layout"] for sample in specification.samples}
+    if len(methods) != 1 or len(layouts) != 1:
+        raise ValueError(f"ATAC condition {condition} mixes peak callers or layouts")
+    method = methods.pop()
+    if method == "callpeak":
+        parameters = {
+            (
+                SAMPLES[sample]["peak_caller"]["qvalue"],
+                SAMPLES[sample]["peak_caller"]["shift"],
+                SAMPLES[sample]["peak_caller"]["extsize"],
+            )
+            for sample in specification.samples
+        }
+        if len(parameters) != 1:
+            raise ValueError(f"ATAC condition {condition} mixes MACS3 parameters")
+        ATAC_CONDITION_METHOD[condition] = "qpois"
+    else:
+        parameters = {
+            (
+                SAMPLES[sample]["peak_caller"]["lower"],
+                SAMPLES[sample]["peak_caller"]["upper"],
+                SAMPLES[sample]["peak_caller"]["prescan_cutoff"],
+            )
+            for sample in specification.samples
+        }
+        if len(parameters) != 1:
+            raise ValueError(f"ATAC condition {condition} mixes HMMRATAC parameters")
+        ATAC_CONDITION_METHOD[condition] = "hmmratac"
+ATAC_CONDITION_IDS = list(ATAC_CONDITIONS)
+ATAC_QPOIS_CONDITIONS = [
+    condition for condition in ATAC_CONDITION_IDS if ATAC_CONDITION_METHOD[condition] == "qpois"
+]
+ATAC_HMMRATAC_CONDITIONS = [
+    condition
+    for condition in ATAC_CONDITION_IDS
+    if ATAC_CONDITION_METHOD[condition] == "hmmratac"
+]
 
 SAMPLE_RE = wildcard_regex(SAMPLE_IDS)
 ATAC_RE = wildcard_regex(ATAC_SAMPLES)
-ATAC_REFINEMENT_RE = wildcard_regex(ATAC_REFINEMENT_SAMPLES)
-ATAC_ATLAS_CONDITION_RE = wildcard_regex(ATAC_ATLAS_CONDITION_IDS)
+ATAC_QPOIS_RE = wildcard_regex(ATAC_QPOIS_SAMPLES)
+ATAC_QPOIS_PE_RE = wildcard_regex(ATAC_QPOIS_PE_SAMPLES)
+HMMRATAC_RE = wildcard_regex(HMMRATAC_SAMPLES)
+ATAC_CONDITION_RE = wildcard_regex(ATAC_CONDITION_IDS)
+ATAC_QPOIS_CONDITION_RE = wildcard_regex(ATAC_QPOIS_CONDITIONS)
+ATAC_HMMRATAC_CONDITION_RE = wildcard_regex(ATAC_HMMRATAC_CONDITIONS)
 CHIP_TREATMENT_RE = wildcard_regex(CHIP_TREATMENTS)
 CHIP_CONTROLLED_TREATMENT_RE = wildcard_regex(CHIP_CONTROLLED_TREATMENTS)
 
@@ -114,10 +158,8 @@ for sample_id, lane in LANES:
         TRIMMED_FASTQ_BY_UNIT[f"{sample_id}.{lane}.R2"] = r2_path
 
 LANE_BAMS = {
-    key: f"{WORK_ROOT}/alignment/lanes/{key[0]}.{key[1]}.coordsort.bam"
-    for key in LANES
+    key: f"{WORK_ROOT}/alignment/lanes/{key[0]}.{key[1]}.coordsort.bam" for key in LANES
 }
-
 
 REFERENCE = config["reference"]
 REFERENCE_PREPARATION = REFERENCE.get("preparation")
@@ -127,7 +169,8 @@ AUTO_PREPARE_REFERENCE = bool(
 REFERENCE_SOURCE_DIR = Path(REFERENCE["fasta"]).parent / "sources"
 if AUTO_PREPARE_REFERENCE:
     REFERENCE_FASTA_ARCHIVE = str(
-        REFERENCE_SOURCE_DIR / Path(urlparse(REFERENCE_PREPARATION["fasta"]["url"]).path).name
+        REFERENCE_SOURCE_DIR
+        / Path(urlparse(REFERENCE_PREPARATION["fasta"]["url"]).path).name
     )
     REFERENCE_ANNOTATION_ARCHIVE = str(
         REFERENCE_SOURCE_DIR
@@ -144,176 +187,160 @@ FASTA_INDEX = str(REFERENCE["fasta"]) + ".fai"
 
 FINAL_BAMS = {sample: f"{RESULT_ROOT}/bam/{sample}.final.bam" for sample in SAMPLE_IDS}
 FINAL_BAIS = {sample: FINAL_BAMS[sample] + ".bai" for sample in SAMPLE_IDS}
-BIGWIGS = {sample: f"{RESULT_ROOT}/tracks/{sample}.CPM.bw" for sample in SAMPLE_IDS}
+CHIP_BIGWIGS = {
+    sample: f"{RESULT_ROOT}/tracks/{sample}.CPM.bw" for sample in CHIP_TREATMENTS
+}
 ATAC_SHIFTED_BIGWIGS = {
     sample: f"{RESULT_ROOT}/tracks/{sample}.Tn5-shifted.CPM.bw" for sample in ATAC_SAMPLES
 }
-ATAC_REFINEMENT_ROOT = f"{RESULT_ROOT}/atac_short_fragments"
-ATAC_FRAGMENT_MAXIMUM = int(ATAC_REFINEMENT["fragment_maximum"])
+
+ATAC_ROOT = f"{RESULT_ROOT}/atac"
+ATAC_WORK = f"{WORK_ROOT}/atac"
+ATAC_FRAGMENT_MAXIMUM = int(ATAC_QPOIS["fragment_maximum"])
 ATAC_SHORT_BAMS = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/bam/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam"
-    for sample in ATAC_REFINEMENT_SAMPLES
+    sample: f"{ATAC_WORK}/replicates/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam"
+    for sample in ATAC_QPOIS_PE_SAMPLES
 }
-ATAC_SHORT_BAIS = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/bam/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam.bai"
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_SHORT_BAIS = {sample: ATAC_SHORT_BAMS[sample] + ".bai" for sample in ATAC_QPOIS_PE_SAMPLES}
+ATAC_INSERTIONS = {
+    sample: f"{ATAC_WORK}/replicates/{sample}.tn5-insertions.bed.gz"
+    for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_SHORT_BIGWIGS = {
-    sample: (
-        f"{ATAC_REFINEMENT_ROOT}/tracks/{sample}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}"
-        ".Tn5-shifted.CPM.bw"
-    )
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_INSERTION_COUNTS = {
+    sample: f"{ATAC_WORK}/replicates/{sample}.tn5-insertions.count.txt"
+    for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_LENIENT_PEAKS = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/macs3/{sample}/{sample}_peaks.narrowPeak"
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_REPLICATE_CANDIDATES = {
+    sample: f"{ATAC_WORK}/replicates/{sample}/peaks/{sample}.candidates.narrowPeak"
+    for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_LENIENT_BEDGRAPHS = [
-    f"{ATAC_REFINEMENT_ROOT}/macs3/{sample}/{sample}_{suffix}.bdg"
-    for sample in ATAC_REFINEMENT_SAMPLES
-    for suffix in ("treat_pileup", "control_lambda")
-]
-ATAC_REFINED_PEAKS = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/refined/{sample}.CPM-refined.bed"
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_REPLICATE_PILEUP_BDG = {
+    sample: f"{ATAC_WORK}/replicates/{sample}.pileup.bdg" for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_REFINEMENT_EXCLUDED = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/refined/{sample}.Excluded.bed"
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_REPLICATE_LAMBDA_BDG = {
+    sample: f"{ATAC_WORK}/replicates/{sample}.lambda.bdg" for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_REFINEMENT_STATS = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/refined/{sample}.stats.json"
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_REPLICATE_QPOIS_BDG = {
+    sample: f"{ATAC_WORK}/replicates/{sample}.qpois.bdg" for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_FRAGMENT_METRICS = {
-    sample: f"{ATAC_REFINEMENT_ROOT}/qc/{sample}.fragment-filter.tsv"
-    for sample in ATAC_REFINEMENT_SAMPLES
+ATAC_REPLICATE_REFINED = {
+    sample: f"{ATAC_WORK}/replicates/{sample}/peaks/{sample}.qpois-refined.bed"
+    for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_ATLAS_ROOT = f"{RESULT_ROOT}/atac_atlas"
-ATAC_ATLAS_CONDITION_SHORT_BAMS = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/bam/{condition}.fragments-lt{ATAC_FRAGMENT_MAXIMUM}.bam"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_REPLICATE_EXCLUDED = {
+    sample: f"{ATAC_WORK}/replicates/{sample}/peaks/{sample}.qpois-excluded.bed"
+    for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_ATLAS_CONDITION_SHORT_BAIS = {
-    condition: ATAC_ATLAS_CONDITION_SHORT_BAMS[condition] + ".bai"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_REPLICATE_STATS = {
+    sample: f"{ATAC_WORK}/replicates/{sample}/peaks/{sample}.qpois-refinement.json"
+    for sample in ATAC_QPOIS_SAMPLES
 }
-ATAC_ATLAS_CONDITION_BIGWIGS = {
-    condition: (
-        f"{ATAC_ATLAS_ROOT}/conditions/{condition}/tracks/{condition}.fragments-lt"
-        f"{ATAC_FRAGMENT_MAXIMUM}.Tn5-shifted.CPM.bw"
-    )
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_REPLICATE_HMM_PEAKS = {
+    sample: f"{ATAC_WORK}/replicates/{sample}/peaks/{sample}.hmmratac.narrowPeak"
+    for sample in HMMRATAC_SAMPLES
 }
-ATAC_ATLAS_CONDITION_MACS_PEAKS = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/macs3/{condition}_peaks.narrowPeak"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+
+ATAC_CONDITION_INSERTIONS = {
+    condition: f"{ATAC_WORK}/conditions/{condition}.tn5-insertions.bed.gz"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_CONDITION_MACS_BEDGRAPHS = [
-    f"{ATAC_ATLAS_ROOT}/conditions/{condition}/macs3/{condition}_{suffix}.bdg"
-    for condition in ATAC_ATLAS_CONDITION_IDS
-    for suffix in ("treat_pileup", "control_lambda")
-]
-ATAC_ATLAS_CONDITION_POOLED_REFINED = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/refined/{condition}.pooled.CPM-refined.bed"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_CONDITION_INSERTION_COUNTS = {
+    condition: f"{ATAC_WORK}/conditions/{condition}.tn5-insertions.count.txt"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_CONDITION_POOLED_EXCLUDED = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/refined/{condition}.pooled.Excluded.bed"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_CONDITION_CANDIDATES = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.candidates.narrowPeak"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_CONDITION_POOLED_STATS = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/refined/{condition}.pooled.stats.json"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_CONDITION_PILEUP_BDG = {
+    condition: f"{ATAC_WORK}/conditions/{condition}.pileup.bdg"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_CONSENSUS_PEAKS = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/{condition}.consensus.bed"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_CONDITION_LAMBDA_BDG = {
+    condition: f"{ATAC_WORK}/conditions/{condition}.lambda.bdg"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_CONSENSUS_SUPPORT = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/{condition}.support.tsv"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_CONDITION_QPOIS_BDG = {
+    condition: f"{ATAC_WORK}/conditions/{condition}.qpois.bdg"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_CONSENSUS_STATS = {
-    condition: f"{ATAC_ATLAS_ROOT}/conditions/{condition}/{condition}.consensus.stats.json"
-    for condition in ATAC_ATLAS_CONDITION_IDS
+ATAC_CONDITION_REFINED = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.qpois-refined.bed"
+    for condition in ATAC_QPOIS_CONDITIONS
 }
-ATAC_ATLAS_OUTPUTS = (
-    [
-        f"{ATAC_ATLAS_ROOT}/atlas.peaks.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.variable.peaks.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.membership.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.presence.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.coverage_fraction.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.mean_cpm.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.maximum_cpm.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.stats.json",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.anchors250.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.variable.peaks.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.membership.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.presence.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.coverage_fraction.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.mean_cpm.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.maximum_cpm.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.narrow-first.stats.json",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-support-fraction.bw",
-        f"{ATAC_ATLAS_ROOT}/atlas.fwhm-boundaries.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.fwhm-diagnostics.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.fwhm.stats.json",
-        f"{ATAC_ATLAS_ROOT}/atlas.center-mode-half-prominence-boundaries.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.center-mode-half-prominence-diagnostics.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.center-mode-half-prominence.stats.json",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.anchors250.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.peaks.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.membership.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.presence.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.coverage_fraction.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.mean_cpm.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.maximum_cpm.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.stats.json",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.signal-shaped.peaks.bed",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.aggregate-shape.bw",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.signal-shape.tsv",
-        f"{ATAC_ATLAS_ROOT}/atlas.dhs-driven.signal-shape.stats.json",
-    ]
-    if ATAC_ATLAS_ENABLED
-    else []
-)
+ATAC_CONDITION_EXCLUDED = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.qpois-excluded.bed"
+    for condition in ATAC_QPOIS_CONDITIONS
+}
+ATAC_CONDITION_REFINEMENT_STATS = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.qpois-refinement.json"
+    for condition in ATAC_QPOIS_CONDITIONS
+}
+ATAC_CONDITION_PILEUP_BW = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/tracks/{condition}.MACS3-pileup.unscaled.bw"
+    for condition in ATAC_QPOIS_CONDITIONS
+}
+ATAC_CONDITION_QPOIS_BW = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/tracks/{condition}.qpois.bw"
+    for condition in ATAC_QPOIS_CONDITIONS
+}
+ATAC_CONDITION_HMM_BAMS = {
+    condition: f"{ATAC_WORK}/conditions/{condition}.pooled.bam"
+    for condition in ATAC_HMMRATAC_CONDITIONS
+}
+ATAC_CONDITION_HMM_BAIS = {
+    condition: ATAC_CONDITION_HMM_BAMS[condition] + ".bai"
+    for condition in ATAC_HMMRATAC_CONDITIONS
+}
+ATAC_CONDITION_HMM_PEAKS = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.hmmratac.narrowPeak"
+    for condition in ATAC_HMMRATAC_CONDITIONS
+}
+ATAC_CONDITION_HMM_BIGWIGS = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/tracks/{condition}.CPM.bw"
+    for condition in ATAC_HMMRATAC_CONDITIONS
+}
+ATAC_CONDITION_CONSENSUS = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.replicate-supported.bed"
+    for condition in ATAC_CONDITION_IDS
+}
+ATAC_CONDITION_SUPPORT = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.replicate-support.tsv"
+    for condition in ATAC_CONDITION_IDS
+}
+ATAC_CONDITION_STATS = {
+    condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.replicate-support.json"
+    for condition in ATAC_CONDITION_IDS
+}
 
 CALLPEAK_NARROW = [
-    sample for sample in TREATMENTS
-    if SAMPLES[sample]["peak_caller"]["command"] == "callpeak"
-    and not SAMPLES[sample]["peak_caller"]["broad"]
+    sample
+    for sample in CHIP_TREATMENTS
+    if not SAMPLES[sample]["peak_caller"]["broad"]
 ]
 CALLPEAK_BROAD = [
-    sample for sample in TREATMENTS
-    if SAMPLES[sample]["peak_caller"]["command"] == "callpeak"
-    and SAMPLES[sample]["peak_caller"]["broad"]
-]
-HMMRATAC = [
-    sample for sample in TREATMENTS
-    if SAMPLES[sample]["peak_caller"]["command"] == "hmmratac"
+    sample
+    for sample in CHIP_TREATMENTS
+    if SAMPLES[sample]["peak_caller"]["broad"]
 ]
 CALLPEAK_NARROW_RE = wildcard_regex(CALLPEAK_NARROW)
 CALLPEAK_BROAD_RE = wildcard_regex(CALLPEAK_BROAD)
-HMMRATAC_RE = wildcard_regex(HMMRATAC)
-
-PEAKS = {
+CHIP_PEAKS = {
     sample: (
-        f"{RESULT_ROOT}/peaks/{sample}/{sample}_accessible_regions.narrowPeak"
-        if sample in HMMRATAC
-        else (
-            f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.broadPeak"
-            if sample in CALLPEAK_BROAD
-            else f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.narrowPeak"
-        )
+        f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.broadPeak"
+        if sample in CALLPEAK_BROAD
+        else f"{RESULT_ROOT}/peaks/{sample}/{sample}_peaks.narrowPeak"
     )
-    for sample in TREATMENTS
+    for sample in CHIP_TREATMENTS
+}
+PEAKS = {
+    **CHIP_PEAKS,
+    **ATAC_REPLICATE_REFINED,
+    **ATAC_REPLICATE_HMM_PEAKS,
 }
 CALLPEAK_BEDGRAPHS = [
     path
-    for sample in CALLPEAK_NARROW + CALLPEAK_BROAD
+    for sample in CHIP_TREATMENTS
     for path in (
         f"{RESULT_ROOT}/peaks/{sample}/{sample}_treat_pileup.bdg",
         f"{RESULT_ROOT}/peaks/{sample}/{sample}_control_lambda.bdg",
@@ -352,44 +379,33 @@ METRICS_TSV = f"{RESULT_ROOT}/qc/metrics.tsv"
 METRICS_JSON = f"{RESULT_ROOT}/qc/metrics.json"
 MULTIQC_REPORT = f"{RESULT_ROOT}/qc/multiqc/multiqc_report.html"
 RESOLVED_CONFIG = f"{RESULT_ROOT}/provenance/resolved_config.json"
-REFERENCE_TARGETS = (
-    BT2_INDEX
-    + [
-        FASTA_INDEX,
-        str(REFERENCE["chrom_sizes"]),
-        str(REFERENCE["blacklist_bed"]),
-        str(REFERENCE["tss_bed"]),
-        str(REFERENCE["autosomes_file"]),
-    ]
-)
+REFERENCE_TARGETS = BT2_INDEX + [
+    FASTA_INDEX,
+    str(REFERENCE["chrom_sizes"]),
+    str(REFERENCE["blacklist_bed"]),
+    str(REFERENCE["tss_bed"]),
+    str(REFERENCE["autosomes_file"]),
+]
 
 FINAL_TARGETS = (
     REFERENCE_TARGETS
     + list(FINAL_BAMS.values())
     + list(FINAL_BAIS.values())
-    + list(BIGWIGS.values())
+    + list(CHIP_BIGWIGS.values())
     + list(ATAC_SHIFTED_BIGWIGS.values())
-    + list(ATAC_SHORT_BAMS.values())
-    + list(ATAC_SHORT_BAIS.values())
-    + list(ATAC_SHORT_BIGWIGS.values())
-    + list(ATAC_LENIENT_PEAKS.values())
-    + ATAC_LENIENT_BEDGRAPHS
-    + list(ATAC_REFINED_PEAKS.values())
-    + list(ATAC_REFINEMENT_EXCLUDED.values())
-    + list(ATAC_REFINEMENT_STATS.values())
-    + list(ATAC_FRAGMENT_METRICS.values())
-    + list(ATAC_ATLAS_CONDITION_BIGWIGS.values())
-    + list(ATAC_ATLAS_CONDITION_MACS_PEAKS.values())
-    + ATAC_ATLAS_CONDITION_MACS_BEDGRAPHS
-    + list(ATAC_ATLAS_CONDITION_POOLED_REFINED.values())
-    + list(ATAC_ATLAS_CONDITION_POOLED_EXCLUDED.values())
-    + list(ATAC_ATLAS_CONDITION_POOLED_STATS.values())
-    + list(ATAC_ATLAS_CONSENSUS_PEAKS.values())
-    + list(ATAC_ATLAS_CONSENSUS_SUPPORT.values())
-    + list(ATAC_ATLAS_CONSENSUS_STATS.values())
-    + ATAC_ATLAS_OUTPUTS
     + list(PEAKS.values())
     + CALLPEAK_BEDGRAPHS
+    + list(ATAC_CONDITION_CANDIDATES.values())
+    + list(ATAC_CONDITION_REFINED.values())
+    + list(ATAC_CONDITION_EXCLUDED.values())
+    + list(ATAC_CONDITION_REFINEMENT_STATS.values())
+    + list(ATAC_CONDITION_PILEUP_BW.values())
+    + list(ATAC_CONDITION_QPOIS_BW.values())
+    + list(ATAC_CONDITION_HMM_PEAKS.values())
+    + list(ATAC_CONDITION_HMM_BIGWIGS.values())
+    + list(ATAC_CONDITION_CONSENSUS.values())
+    + list(ATAC_CONDITION_SUPPORT.values())
+    + list(ATAC_CONDITION_STATS.values())
     + list(FRIP_TSV.values())
     + list(TSS_PLOTS.values())
     + list(FRAGMENT_HISTOGRAMS.values())
@@ -411,6 +427,6 @@ include: "rules/reference.smk"
 include: "rules/read_processing.smk"
 include: "rules/alignment.smk"
 include: "rules/peaks.smk"
-include: "rules/atac_refinement.smk"
-include: "rules/atac_atlas.smk"
+include: "rules/atac_peaks.smk"
+include: "rules/atac_consensus.smk"
 include: "rules/qc.smk"

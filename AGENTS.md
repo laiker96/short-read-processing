@@ -18,6 +18,9 @@ names, or sample relationships.
 
 - The public data input is an accession CSV/TSV conforming to
   `schemas/sample-sheet.schema.yaml`.
+- The canonical user-facing columns are `accession`, `library_id`, `assay`, and
+  `context`. Genome is a project-level CLI value; assay defaults and accession
+  layout are resolved rather than repeated per row.
 - Users do not provide raw FASTQ paths to the primary entry point.
 - `src/run_pipeline.py` is the canonical accession-to-results command.
 - `workflow/Snakefile` is the canonical processing workflow. Put shared rules
@@ -25,51 +28,34 @@ names, or sample relationships.
   production behavior.
 - `dm6` and `hg38` reference preparation belongs in the workflow DAG.
 - Raw FASTQs are immutable inputs. Never overwrite or modify them in place.
-- Technical runs share a `sample_id`, run lane-level QC/alignment separately,
+- Technical runs share a `library_id`, run lane-level QC/alignment separately,
   and merge before biological-library duplicate marking.
-- Biological replicates have distinct `sample_id` values and remain separate
-  through this processing pipeline.
+- Biological replicates have distinct `library_id` values and remain separate
+  through replicate peak calling. ATAC libraries with the same `context` are
+  pooled automatically.
 
 ## Scientific invariants
 
-- Paired-end ATAC defaults to HMMRATAC for primary peaks.
-- HMMRATAC is invalid for single-end data.
-- The canonical paired-end ATAC refinement branch retains proper pairs with
-  `0 < abs(TLEN) < 150`, creates a Tn5-shifted CPM BigWig, calls lenient MACS3
-  candidates with `-f BAM --nomodel --shift -75 --extsize 150 -q 0.10`, and
-  refines 50-400 bp intervals at mean CPM >= 2. CPM thresholds are evaluated
-  from high to low. Modes separated by at least 25% relative saddle prominence
-  retain their last separate qualifying boundaries; shallower subdivisions
-  merge and continue expanding as one component.
-- CPM-refined peaks are signal-derived and must not be described as q-values or
-  independently FDR-controlled calls.
-- The optional ATAC atlas uses an explicit condition map. Within conditions,
-  pooled refined peaks require configured biological-replicate coverage.
-  Across conditions, fixed-width summit windows undergo iterative overlap
-  removal; never replace this with raw interval union/`bedtools merge` chaining.
-- Cross-condition atlas presence, peak coverage, and CPM are separate matrices;
-  a tissue-specific peak does not require support from another tissue.
-- Contributor-aware signal shaping is downstream of DHS-seed grouping and must
-  not change membership. Use at most one pooled profile per contributing
-  condition, normalize profiles locally, and weight contributing conditions
-  equally; absent conditions do not contribute zeros. Constrain each shaped
-  summit to a contributing source DHS so neighboring elements cannot capture it.
-- The fixed-atlas FWHM model uses all condition consensus DHSs but unions them
-  within each condition before counting support. FWHM is the connected
-  half-maximum condition-support component associated with the fixed anchor;
-  do not substitute raw DHS-record counts or pooled CPM signal.
-- Keep the narrow-source-first atlas as a comparison branch. It prioritizes
-  original DHS width before signal when selecting non-overlapping 250-bp
-  anchors and may annotate a broad bridging source to multiple retained anchors;
-  do not silently replace the canonical signal-prioritized fixed atlas.
-- Keep center-mode half-prominence boundaries separate from ordinary FWHM:
-  select the local support mode nearest the anchor center and use its valley
-  prominence rather than silently replacing the highest-support result.
+- ATAC defaults to the two-ended Tn5/MACS3-qpois branch. HMMRATAC is an
+  explicit alternative and is invalid for single-end data.
+- Paired-end ATAC qpois retains proper pairs with `0 < abs(TLEN) < 150`, applies
+  Tn5 offsets, and converts both mates to one-base insertion records. MACS3 uses
+  `-f BED --nomodel --shift -75 --extsize 150 --keep-dup all -B -q 0.10`.
+- ATAC qpois is computed with `macs3 bdgcmp -m qpois` from the unscaled
+  treatment pileup and local lambda. Do not add `--SPMR` to this branch.
+- Qpois refinement evaluates exponents 2-325 and retains 50-400 bp components;
+  broad components split as the exponent rises. Refined boundaries are not an
+  independent FDR-controlled peak call.
+- The sample-sheet `context` column controls ATAC replicate pooling. Replicate
+  calls are evidence; the primary endpoint is a pooled peak covered by the
+  configured fraction in the configured number of biological libraries.
+- Cross-condition atlas merging, H3K27ac integration, and Micro-C integration
+  are outside this processing DAG until explicitly designed.
 - TF ChIP defaults to narrow MACS3 peaks; histone ChIP defaults to broad peaks.
-- ChIP controls are explicit sample-sheet relationships. IP-only ChIP is valid
-  but must be labeled as such and runs MACS3 without `-c`.
-- MACS3 `callpeak` outputs include `-B --SPMR` treatment-pileup and
-  control-lambda bedGraphs.
+- ChIP controls are explicit `control_library` relationships. IP-only ChIP is
+  represented by omitting that optional column and runs MACS3 without `-c`.
+- ChIP MACS3 `callpeak` outputs include `-B --SPMR` treatment-pileup and
+  control-lambda bedGraphs. The ATAC qpois branch deliberately omits `--SPMR`.
 - FRiP denominators must be documented and fragment-aware for paired-end data.
 
 If a task changes any invariant, update the schema, validators, tests, README,
@@ -133,8 +119,9 @@ Do not commit:
 - secrets, credentials, private metadata, or large temporary fixtures.
 
 The versioned `resources/` directory is intentionally limited to adapter FASTAs
-and the curated ATAC/H3K27ac atlas metadata and sample sheets. Do not add random
-download selections or generated smoke-test data there.
+and the two canonical ATAC/H3K27ac atlas input tables. Detailed selection/QC
+metadata belongs in the atlas-analysis repository. Do not add random download
+selections or generated smoke-test data here.
 
 Preserve unrelated user changes in a dirty worktree. Use `rg`/`rg --files` for
 search and `apply_patch` for focused file edits.
@@ -166,8 +153,8 @@ sandbox. Report skipped tests and environmental failures honestly.
 
 For schema/configuration changes, include positive and negative validation
 tests. For workflow changes, include a Snakemake dry-run assertion for every
-new rule branch. For refinement changes, test interval boundaries, threshold
-semantics, empty inputs, and deterministic output ordering.
+new rule branch. For qpois refinement changes, test interval boundaries,
+exponent semantics, empty inputs, and deterministic output ordering.
 
 ## Documentation
 

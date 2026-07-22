@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from short_read_processing.macs3 import callpeak_arguments, callpeak_bedgraph_paths
+from short_read_processing.macs3 import (
+    atac_qpois_callpeak_arguments,
+    callpeak_arguments,
+    callpeak_bedgraph_paths,
+)
 
 
 def test_callpeak_argv_and_bedgraph_outputs():
@@ -62,3 +66,30 @@ def test_broad_callpeak_omits_external_control_when_ip_only():
     assert "-c" not in arguments
     assert "--broad" in arguments
     assert arguments[arguments.index("--broad-cutoff") + 1] == "0.1"
+
+
+def test_atac_qpois_uses_two_ended_bed_without_spmr():
+    arguments = atac_qpois_callpeak_arguments(
+        {
+            "command": "callpeak",
+            "mode": "tn5_qpois",
+            "format": "BED",
+            "qvalue": 0.1,
+            "broad": False,
+            "nomodel": True,
+            "shift": -75,
+            "extsize": 150,
+            "write_bedgraph": True,
+            "spmr": False,
+        },
+        insertion_bed=Path("insertions.bed.gz"),
+        name="atac_rep1",
+        genome_size="dm",
+        output_dir=Path("peaks"),
+    )
+
+    assert arguments[arguments.index("-f") + 1] == "BED"
+    assert arguments[arguments.index("-t") + 1] == "insertions.bed.gz"
+    assert "--keep-dup" in arguments
+    assert "-B" in arguments
+    assert "--SPMR" not in arguments

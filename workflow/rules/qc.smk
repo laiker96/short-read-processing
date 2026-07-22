@@ -22,7 +22,7 @@ rule bigwig_cpm:
     output:
         bw=f"{RESULT_ROOT}/tracks/{{sample}}.CPM.bw"
     wildcard_constraints:
-        sample=SAMPLE_RE
+        sample=CHIP_TREATMENT_RE
     threads: 6
     resources:
         mem_mb=6000

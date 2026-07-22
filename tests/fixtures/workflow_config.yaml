@@ -16,24 +16,22 @@ reference:
 samples:
   - id: atac_rep1
     accessions: [SRR123456]
-    replicate: 1
+    context: example
     role: treatment
     layout: paired
     r1: [tests/fixtures/workflow/sample_R1.fastq]
     r2: [tests/fixtures/workflow/sample_R2.fastq]
     peak_caller:
       command: callpeak
-      format: BAM
-      qvalue: 0.01
+      mode: tn5_qpois
+      format: BED
+      qvalue: 0.10
       broad: false
       nomodel: true
       shift: -75
       extsize: 150
       write_bedgraph: true
-      spmr: true
-      bedgraph_outputs:
-        treatment_suffix: _treat_pileup.bdg
-        control_suffix: _control_lambda.bdg
+      spmr: false
     parameters:
       trimming:
         adapter_preset: nextera
@@ -49,3 +47,10 @@ samples:
       filtering:
         remove_duplicates: true
         remove_mitochondrial: true
+atac_qpois:
+  fragment_maximum: 150
+  minimum_exponent: 2
+  maximum_exponent: 325
+  merge_gap: 1
+  minimum_length: 50
+  maximum_length: 400

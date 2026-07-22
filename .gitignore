@@ -4,8 +4,7 @@
 .cluster-bootstrap/
 .snakemake/
 .cache/
-.atlas-atac-dual.lock
-.atlas-h3k27ac.lock
+.atlas.lock
 .pytest_cache/
 __pycache__/
 *.py[cod]

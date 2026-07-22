@@ -71,16 +71,11 @@ REFERENCE_SOURCES = {
 }
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-ATAC_REFINEMENT_DEFAULTS = {
-    "enabled": True,
+ATAC_QPOIS_DEFAULTS = {
     "fragment_maximum": 150,
-    "macs3_qvalue": 0.10,
-    "macs3_shift": -75,
-    "macs3_extsize": 150,
-    "bigwig_bin_size": 10,
-    "minimum_mean_cpm": 2.0,
-    "minimum_mode_prominence": 0.25,
-    "merge_gap_bp": 1,
+    "minimum_exponent": 2,
+    "maximum_exponent": 325,
+    "merge_gap": 1,
     "minimum_length": 50,
     "maximum_length": 400,
 }
@@ -164,7 +159,7 @@ def _peak_config(row: dict[str, Any], layout: str) -> dict[str, object]:
             raise AcquisitionError("HMMRATAC is only valid for ATAC-seq")
         if layout != "paired":
             raise AcquisitionError(
-                f"Sample {row['sample_id']}: HMMRATAC requires paired-end ATAC-seq; "
+                f"Library {row['library_id']}: HMMRATAC requires paired-end ATAC-seq; "
                 "set peak_caller=callpeak for single-end data"
             )
         return {
@@ -172,6 +167,22 @@ def _peak_config(row: dict[str, Any], layout: str) -> dict[str, object]:
             "lower": row["hmmratac_lower"],
             "upper": row["hmmratac_upper"],
             "prescan_cutoff": row["hmmratac_prescan_cutoff"],
+        }
+
+    if assay == "atac":
+        if row["macs3_broad"]:
+            raise AcquisitionError("ATAC two-ended qpois calling does not support broad peaks")
+        return {
+            "command": "callpeak",
+            "mode": "tn5_qpois",
+            "format": "BED",
+            "qvalue": row["macs3_qvalue"],
+            "broad": False,
+            "nomodel": True,
+            "shift": row["macs3_shift"] if row["macs3_shift"] is not None else -75,
+            "extsize": row["macs3_extsize"] if row["macs3_extsize"] is not None else 150,
+            "write_bedgraph": True,
+            "spmr": False,
         }
 
     macs_format = str(row["macs3_format"])
@@ -281,25 +292,26 @@ def generate_configs(
     path_base: Path,
     require_fastq_files: bool,
     schema_path: Path = DEFAULT_SCHEMA,
-    atac_atlas_condition_map: Path | None = None,
-    atac_atlas_peak_width: int = 250,
-    atac_atlas_minimum_replicates: int = 2,
-    atac_atlas_overlap_fraction: float = 0.5,
+    genome: str = "dm6",
+    atac_minimum_replicates: int = 2,
+    atac_overlap_fraction: float = 0.5,
 ) -> list[Path]:
     project = _safe_id(project, "project ID")
     run_id = _safe_id(run_id, "run ID")
+    if genome not in GENOME_DEFAULTS:
+        raise AcquisitionError(f"Unsupported genome: {genome!r}")
     manifest_rows = read_manifest(manifest_path)
     sheet_rows = read_sample_sheet(sample_sheet_path, schema_path=schema_path)
     manifest_by_request: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in manifest_rows:
         manifest_by_request[row["requested_accession"]].append(row)
 
-    sheet_by_sample: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    sheet_by_library: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in sheet_rows:
-        sheet_by_sample[str(row["sample_id"])].append(row)
+        sheet_by_library[str(row["library_id"])].append(row)
 
     prepared: list[dict[str, Any]] = []
-    for sample_id, rows in sheet_by_sample.items():
+    for library_id, rows in sheet_by_library.items():
         first = rows[0]
         accessions = list(dict.fromkeys(str(row["accession"]) for row in rows))
         runs = _manifest_runs_for_accessions(accessions, manifest_by_request)
@@ -310,13 +322,13 @@ def generate_configs(
         )
         prepared.append(
             {
-                "id": sample_id,
+                "id": library_id,
                 "accessions": accessions,
-                "replicate": first["replicate"],
                 "assay": first["assay"],
-                "genome": first["genome"],
+                "genome": genome,
+                "context": first["context"],
                 "role": first["role"],
-                "control": first["control_id"],
+                "control": first["control_library"],
                 "layout": layout,
                 "r1": r1,
                 "r2": r2,
@@ -328,22 +340,18 @@ def generate_configs(
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for item in prepared:
         groups[(str(item["assay"]), str(item["genome"]))].append(item)
-    if atac_atlas_condition_map is not None and not any(
-        assay == "atac" for assay, _genome in groups
-    ):
-        raise AcquisitionError("--atac-atlas-condition-map requires ATAC samples")
-
     output_dir.mkdir(parents=True, exist_ok=True)
     output_paths: list[Path] = []
     for (assay, genome), items in sorted(groups.items()):
         sample_ids = {str(item["id"]) for item in items}
         role_by_id = {str(item["id"]): str(item["role"]) for item in items}
+        item_by_id = {str(item["id"]): item for item in items}
         samples: list[dict[str, object]] = []
         for item in items:
             sample: dict[str, object] = {
                 "id": item["id"],
                 "accessions": item["accessions"],
-                "replicate": item["replicate"],
+                "context": item["context"],
                 "role": item["role"],
                 "layout": item["layout"],
                 "r1": item["r1"],
@@ -354,13 +362,21 @@ def generate_configs(
             if item["role"] == "treatment":
                 sample["peak_caller"] = item["peak_caller"]
             if assay.startswith("chip") and item["role"] == "treatment":
-                control_id = str(item["control"] or "")
-                if control_id:
-                    if control_id not in sample_ids or role_by_id.get(control_id) != "control":
+                control_library = str(item["control"] or "")
+                if control_library:
+                    if (
+                        control_library not in sample_ids
+                        or role_by_id.get(control_library) != "control"
+                    ):
                         raise AcquisitionError(
                             f"ChIP treatment {item['id']} has an invalid matched control"
                         )
-                    sample["control"] = control_id
+                    if item_by_id[control_library]["layout"] != item["layout"]:
+                        raise AcquisitionError(
+                            f"ChIP treatment {item['id']} and control {control_library} "
+                            "must have the same read layout"
+                        )
+                    sample["control"] = control_library
             samples.append(sample)
 
         group_project = project if len(groups) == 1 else f"{project}.{assay}.{genome}"
@@ -380,37 +396,46 @@ def generate_configs(
             },
         }
         if assay == "atac":
-            config["atac_refinement"] = dict(ATAC_REFINEMENT_DEFAULTS)
-            if atac_atlas_condition_map is not None:
-                from .atlas import read_condition_map
+            from .consensus import condition_specs
 
-                condition_map = atac_atlas_condition_map.resolve()
-                if not condition_map.is_file():
-                    raise AcquisitionError(
-                        f"ATAC atlas condition map does not exist: {condition_map}"
-                    )
-                if any(item["layout"] != "paired" for item in items):
-                    raise AcquisitionError(
-                        "The ATAC atlas stage requires paired-end biological libraries"
-                    )
-                read_condition_map(
-                    condition_map,
-                    sample_ids=sample_ids,
-                    minimum_replicates=atac_atlas_minimum_replicates,
-                )
-                if atac_atlas_peak_width < 1:
-                    raise AcquisitionError("ATAC atlas peak width must be positive")
-                if not 0 < atac_atlas_overlap_fraction <= 1:
-                    raise AcquisitionError(
-                        "ATAC atlas overlap fraction must be in (0, 1]"
-                    )
-                config["atac_atlas"] = {
-                    "enabled": True,
-                    "condition_map": _display_path(condition_map, path_base),
-                    "peak_width": atac_atlas_peak_width,
-                    "minimum_replicates": atac_atlas_minimum_replicates,
-                    "replicate_overlap_fraction": atac_atlas_overlap_fraction,
+            config["atac_qpois"] = dict(ATAC_QPOIS_DEFAULTS)
+            samples_by_context: dict[str, list[str]] = defaultdict(list)
+            for item in items:
+                samples_by_context[str(item["context"])].append(str(item["id"]))
+            condition_values = [
+                {
+                    "id": context,
+                    "label": context,
+                    "samples": sorted(context_samples),
                 }
+                for context, context_samples in sorted(samples_by_context.items())
+            ]
+            conditions = condition_specs(
+                condition_values,
+                sample_ids=sample_ids,
+                minimum_replicates=atac_minimum_replicates,
+            )
+            for condition in conditions:
+                methods = {
+                    str(item_by_id[sample]["peak_caller"]["command"])
+                    for sample in condition.samples
+                }
+                layouts = {
+                    str(item_by_id[sample]["layout"])
+                    for sample in condition.samples
+                }
+                if len(methods) != 1 or len(layouts) != 1:
+                    raise AcquisitionError(
+                        f"ATAC condition {condition.condition_id} mixes peak callers or layouts"
+                    )
+            if not 0 < atac_overlap_fraction <= 1:
+                raise AcquisitionError("ATAC overlap fraction must be in (0, 1]")
+            config["atac_consensus"] = {
+                "enabled": True,
+                "conditions": condition_values,
+                "minimum_replicates": atac_minimum_replicates,
+                "replicate_overlap_fraction": atac_overlap_fraction,
+            }
         output_path = output_dir / f"{group_project}.yaml"
         _write_config_if_changed(output_path, config)
         output_paths.append(output_path.resolve())

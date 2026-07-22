@@ -1,13 +1,10 @@
 import shlex
 
-from short_read_processing.macs3 import callpeak_arguments
-
-
-def aria2_checksum(source):
-    algorithm, digest = source["checksum"].split(":", 1)
-    if algorithm == "sha256":
-        algorithm = "sha-256"
-    return f"{algorithm}={digest}"
+from short_read_processing.macs3 import (
+    atac_qpois_callpeak_arguments,
+    callpeak_arguments,
+)
+from short_read_processing.workflow_config import aria2_checksum
 
 
 def raw_fastq(wildcards):
@@ -74,7 +71,8 @@ def bowtie_layout_arguments(wildcards):
 
 
 def bowtie_preset(wildcards):
-    return "--" + SAMPLES[wildcards.sample]["parameters"]["alignment"]["preset"]
+    preset = SAMPLES[wildcards.sample]["parameters"]["alignment"]["preset"]
+    return f"--{preset}"
 
 
 def required_flags(wildcards):
@@ -82,11 +80,11 @@ def required_flags(wildcards):
 
 
 def excluded_flags(wildcards):
-    excluded = 4 + 256 + 512 + 2048
+    excluded = 4 | 256 | 512 | 2048
     if SAMPLES[wildcards.sample]["layout"] == "paired":
-        excluded += 8
+        excluded |= 8
     if SAMPLES[wildcards.sample]["parameters"]["filtering"]["remove_duplicates"]:
-        excluded += 1024
+        excluded |= 1024
     return excluded
 
 
@@ -109,95 +107,73 @@ def callpeak_argv(wildcards):
     return shlex.join(arguments)
 
 
-def atac_refinement_callpeak_argv(wildcards):
-    refinement = ATAC_REFINEMENT
-    peak_config = {
-        "command": "callpeak",
-        "format": "BAM",
-        "qvalue": refinement["macs3_qvalue"],
-        "broad": False,
-        "nomodel": True,
-        "shift": refinement["macs3_shift"],
-        "extsize": refinement["macs3_extsize"],
-        "write_bedgraph": True,
-        "spmr": True,
-    }
-    arguments = callpeak_arguments(
-        peak_config,
-        treatment_bam=Path(ATAC_SHORT_BAMS[wildcards.sample]),
-        control_bam=None,
-        name=wildcards.sample,
+def atac_insertion_bam(wildcards):
+    if wildcards.sample in ATAC_SHORT_BAMS:
+        return ATAC_SHORT_BAMS[wildcards.sample]
+    return FINAL_BAMS[wildcards.sample]
+
+
+def atac_insertion_bai(wildcards):
+    if wildcards.sample in ATAC_SHORT_BAIS:
+        return ATAC_SHORT_BAIS[wildcards.sample]
+    return FINAL_BAIS[wildcards.sample]
+
+
+def atac_qpois_replicate_callpeak_argv(wildcards):
+    sample = wildcards.sample
+    arguments = atac_qpois_callpeak_arguments(
+        SAMPLES[sample]["peak_caller"],
+        insertion_bed=Path(ATAC_INSERTIONS[sample]).resolve(),
+        name=sample,
         genome_size=REFERENCE["macs3_genome_size"],
-        output_dir=Path(f"{ATAC_REFINEMENT_ROOT}/macs3/{wildcards.sample}"),
+        output_dir=Path("."),
     )
-    arguments.extend(["--keep-dup", "all"])
     return shlex.join(arguments)
 
 
-def atac_atlas_condition_callpeak_argv(wildcards):
+def atac_condition_peak_config(condition):
+    sample = ATAC_CONDITIONS[condition].samples[0]
+    return SAMPLES[sample]["peak_caller"]
+
+
+def atac_qpois_condition_callpeak_argv(wildcards):
     condition = wildcards.condition
-    peak_config = {
-        "command": "callpeak",
-        "format": "BAM",
-        "qvalue": ATAC_REFINEMENT["macs3_qvalue"],
-        "broad": False,
-        "nomodel": True,
-        "shift": ATAC_REFINEMENT["macs3_shift"],
-        "extsize": ATAC_REFINEMENT["macs3_extsize"],
-        "write_bedgraph": True,
-        "spmr": True,
-    }
-    arguments = callpeak_arguments(
-        peak_config,
-        treatment_bam=Path(ATAC_ATLAS_CONDITION_SHORT_BAMS[condition]),
-        control_bam=None,
+    arguments = atac_qpois_callpeak_arguments(
+        atac_condition_peak_config(condition),
+        insertion_bed=Path(ATAC_CONDITION_INSERTIONS[condition]).resolve(),
         name=condition,
         genome_size=REFERENCE["macs3_genome_size"],
-        output_dir=Path(f"{ATAC_ATLAS_ROOT}/conditions/{condition}/macs3"),
+        output_dir=Path("."),
     )
-    arguments.extend(["--keep-dup", "all"])
     return shlex.join(arguments)
 
 
-def atac_atlas_replicate_arguments(wildcards):
+def atac_condition_insertion_inputs(wildcards):
+    return [
+        ATAC_INSERTIONS[sample]
+        for sample in ATAC_CONDITIONS[wildcards.condition].samples
+    ]
+
+
+def atac_condition_insertion_count_inputs(wildcards):
+    return [
+        ATAC_INSERTION_COUNTS[sample]
+        for sample in ATAC_CONDITIONS[wildcards.condition].samples
+    ]
+
+
+def atac_condition_bam_inputs(wildcards):
+    return [
+        FINAL_BAMS[sample]
+        for sample in ATAC_CONDITIONS[wildcards.condition].samples
+    ]
+
+
+def atac_consensus_replicate_arguments(wildcards):
     condition = wildcards.condition
+    method = ATAC_CONDITION_METHOD[condition]
+    paths = ATAC_REPLICATE_REFINED if method == "qpois" else ATAC_REPLICATE_HMM_PEAKS
     return " ".join(
-        "--replicate "
-        + shlex.quote(f"{sample}={ATAC_REFINED_PEAKS[sample]}")
-        for sample in ATAC_ATLAS_CONDITIONS[condition].samples
-    )
-
-
-def atac_atlas_condition_arguments(_wildcards):
-    return " ".join(
-        "--condition "
-        + " ".join(
-            shlex.quote(value)
-            for value in (
-                condition,
-                ATAC_ATLAS_CONSENSUS_PEAKS[condition],
-                ATAC_ATLAS_CONDITION_BIGWIGS[condition],
-            )
-        )
-        for condition in ATAC_ATLAS_CONDITION_IDS
-    )
-
-
-def atac_atlas_condition_bigwig_arguments(_wildcards):
-    return " ".join(
-        "--condition-bigwig "
-        + shlex.quote(
-            f"{condition}={ATAC_ATLAS_CONDITION_BIGWIGS[condition]}"
-        )
-        for condition in ATAC_ATLAS_CONDITION_IDS
-    )
-
-
-def atac_atlas_condition_dhs_arguments(_wildcards):
-    return " ".join(
-        "--condition-dhs "
-        + shlex.quote(
-            f"{condition}={ATAC_ATLAS_CONSENSUS_PEAKS[condition]}"
-        )
-        for condition in ATAC_ATLAS_CONDITION_IDS
+        "--replicate {}".format(shlex.quote(f"{sample}={paths[sample]}"))
+        for sample in ATAC_CONDITIONS[condition].samples
     )

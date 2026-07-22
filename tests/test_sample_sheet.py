@@ -1,114 +1,120 @@
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
 
 from short_read_processing.accessions import AcquisitionError
-from short_read_processing.atlas import read_condition_map
 from short_read_processing.sample_sheet import read_sample_sheet
-from write_atlas_atac_sample_sheet import selected_sample_rows as selected_atac_rows
-from write_atlas_h3k27ac_sample_sheet import selected_sample_rows as selected_h3k27ac_rows
 
 
-def test_csv_is_accepted_and_defaults_are_resolved(tmp_path: Path):
+def test_four_column_csv_is_accepted_and_defaults_are_resolved(tmp_path: Path):
     sheet = tmp_path / "samples.csv"
     sheet.write_text(
-        "accession,sample_id,assay,genome,role,control_id,replicate,peak_caller\n"
-        "SRR123,atac_rep1,atac,dm6,treatment,,1,\n"
+        "accession,library_id,assay,context\n"
+        "SRR123,atac_rep1,atac,eye\n"
     )
     row = read_sample_sheet(sheet)[0]
+
     assert row["accession"] == "SRR123"
-    assert row["peak_caller"] == "hmmratac"
+    assert row["library_id"] == "atac_rep1"
+    assert row["role"] == "treatment"
+    assert row["peak_caller"] == "callpeak"
+    assert row["macs3_qvalue"] == 0.1
+    assert row["macs3_shift"] == -75
+    assert row["macs3_extsize"] == 150
     assert row["adapter_preset"] == "nextera"
     assert row["mapq_minimum"] == 30
 
 
-def test_missing_required_column_fails(tmp_path: Path):
-    sheet = tmp_path / "samples.tsv"
-    sheet.write_text("accession\tsample_id\nSRR123\tatac_rep1\n")
-    with pytest.raises(AcquisitionError, match="missing required columns"):
-        read_sample_sheet(sheet)
-
-
-def test_technical_runs_must_have_identical_parameters(tmp_path: Path):
+def test_h3k27ac_alias_resolves_histone_defaults(tmp_path: Path):
     sheet = tmp_path / "samples.tsv"
     sheet.write_text(
-        "accession\tsample_id\tassay\tgenome\trole\tcontrol_id\treplicate\tpeak_caller\n"
-        "SRR123\tatac_rep1\tatac\tdm6\ttreatment\t\t1\thmmratac\n"
-        "SRR124\tatac_rep1\tatac\tdm6\ttreatment\t\t2\thmmratac\n"
-    )
-    with pytest.raises(AcquisitionError, match="disagree on: replicate"):
-        read_sample_sheet(sheet)
-
-
-def test_callpeak_shift_requires_bam_format(tmp_path: Path):
-    sheet = tmp_path / "samples.tsv"
-    sheet.write_text(
-        "accession\tsample_id\tassay\tgenome\trole\tcontrol_id\treplicate\tpeak_caller"
-        "\tmacs3_shift\tmacs3_extsize\n"
-        "SRR123\tatac_rep1\tatac\tdm6\ttreatment\t\t1\tcallpeak\t-75\t150\n"
-    )
-    with pytest.raises(AcquisitionError, match="requires macs3_format=BAM"):
-        read_sample_sheet(sheet)
-
-
-def test_ip_only_histone_defaults_are_valid(tmp_path: Path):
-    sheet = tmp_path / "samples.tsv"
-    sheet.write_text(
-        "accession\tsample_id\tassay\tgenome\trole\tcontrol_id\treplicate\tpeak_caller\n"
-        "SRR123\th3k27ac_rep1\tchip_histone\tdm6\ttreatment\t\t1\tcallpeak\n"
+        "accession\tlibrary_id\tassay\tcontext\n"
+        "SRR123\th3_rep1\th3k27ac\teye\n"
     )
     row = read_sample_sheet(sheet)[0]
 
-    assert row["control_id"] is None
+    assert row["assay"] == "chip_histone"
     assert row["macs3_broad"] is True
     assert row["macs3_broad_cutoff"] == 0.1
     assert row["adapter_preset"] == "truseq"
 
 
-def test_atlas_selected_rows_preserve_biological_and_technical_replicates():
-    metadata = Path(__file__).parents[1] / "resources/atlas_atac_seq_metadata.tsv"
-    rows = selected_atac_rows(metadata)
-
-    assert len(rows) == 23
-    assert len({row["accession"] for row in rows}) == 23
-    assert len({row["sample_id"] for row in rows}) == 22
-    assert [row["sample_id"] for row in rows].count("e5_atac_rep1") == 2
-    assert {row["sample_id"] for row in rows if row["sample_id"].startswith("e11_")} == {
-        "e11_atac_rep1",
-        "e11_atac_rep2",
-    }
-    assert {row["sample_id"] for row in rows if row["sample_id"].startswith("wid_")} == {
-        "wid_atac_rep1",
-        "wid_atac_rep2",
-    }
-
-
-def test_curated_atac_condition_map_covers_every_biological_library_once():
-    resources = Path(__file__).parents[1] / "resources"
-    rows = selected_atac_rows(resources / "atlas_atac_seq_metadata.tsv")
-    sample_ids = {str(row["sample_id"]) for row in rows}
-
-    conditions = read_condition_map(
-        resources / "atlas_atac_conditions.tsv",
-        sample_ids=sample_ids,
-        minimum_replicates=2,
+def test_missing_required_column_fails(tmp_path: Path):
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "accession\tlibrary_id\tassay\n"
+        "SRR123\tatac_rep1\tatac\n"
     )
-
-    assert len(conditions) == 9
-    assert sum(len(condition.samples) for condition in conditions) == 22
-    assert {sample for condition in conditions for sample in condition.samples} == sample_ids
+    with pytest.raises(AcquisitionError, match="missing required columns: context"):
+        read_sample_sheet(sheet)
 
 
-def test_atlas_h3k27ac_selected_rows_are_ip_only():
-    metadata = Path(__file__).parents[1] / "resources/atlas_h3k27ac_metadata_ip_only.tsv"
-    rows = selected_h3k27ac_rows(metadata)
+def test_technical_runs_must_have_identical_contexts(tmp_path: Path):
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "accession\tlibrary_id\tassay\tcontext\n"
+        "SRR123\tatac_rep1\tatac\teye\n"
+        "SRR124\tatac_rep1\tatac\twing\n"
+    )
+    with pytest.raises(AcquisitionError, match="disagree on: context"):
+        read_sample_sheet(sheet)
 
-    assert len(rows) == 15
-    assert len({row["accession"] for row in rows}) == 15
-    assert len({row["sample_id"] for row in rows}) == 15
-    assert all(row["assay"] == "chip_histone" for row in rows)
-    assert all(row["control_id"] == "" for row in rows)
-    assert {row["sample_id"] for row in rows if str(row["sample_id"]).startswith("e5_")} == {
-        "e5_h3k27ac_rep1",
-        "e5_h3k27ac_rep2",
+
+def test_matched_input_must_name_control_in_same_context(tmp_path: Path):
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "accession\tlibrary_id\tassay\tcontext\trole\tcontrol_library\n"
+        "SRR123\th3_rep1\th3k27ac\teye\ttreatment\tinput_rep1\n"
+        "SRR124\tinput_rep1\th3k27ac\twing\tcontrol\t\n"
+    )
+    with pytest.raises(AcquisitionError, match="same assay and context"):
+        read_sample_sheet(sheet)
+
+
+def test_chip_callpeak_shift_requires_bam_format(tmp_path: Path):
+    sheet = tmp_path / "samples.tsv"
+    sheet.write_text(
+        "accession\tlibrary_id\tassay\tcontext\tmacs3_shift\tmacs3_extsize\n"
+        "SRR123\ttf_rep1\tchip_tf\teye\t-75\t150\n"
+    )
+    with pytest.raises(AcquisitionError, match="requires macs3_format=BAM"):
+        read_sample_sheet(sheet)
+
+
+def test_curated_ip_only_table_is_minimal_and_covers_atlas_libraries():
+    resources = Path(__file__).parents[1] / "resources"
+    rows = read_sample_sheet(resources / "atlas_samples_ip_only.tsv")
+
+    assert len(rows) == 38
+    assert len({row["accession"] for row in rows}) == 38
+    assert len({row["library_id"] for row in rows}) == 37
+    assert [row["library_id"] for row in rows].count("e5_atac_rep1") == 2
+    assert {row["context"] for row in rows if row["assay"] == "atac"} == {
+        "ab", "e11", "e13", "e5", "ead", "hid", "lb", "o", "wid"
+    }
+    atac_libraries: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        if row["assay"] == "atac":
+            atac_libraries[str(row["context"])].add(str(row["library_id"]))
+    assert all(len(libraries) >= 2 for libraries in atac_libraries.values())
+    assert all(row["control_library"] is None for row in rows)
+
+
+def test_curated_controlled_table_links_three_matched_inputs():
+    resources = Path(__file__).parents[1] / "resources"
+    rows = read_sample_sheet(resources / "atlas_samples_with_inputs.tsv")
+    controls = {row["library_id"] for row in rows if row["role"] == "control"}
+    treatments = {
+        row["library_id"]: row["control_library"]
+        for row in rows
+        if row["control_library"]
+    }
+
+    assert len(rows) == 41
+    assert controls == {"ab_input_rep1", "e5_input_rep1", "e5_input_rep2"}
+    assert treatments == {
+        "ab_h3k27ac_rep1": "ab_input_rep1",
+        "e5_h3k27ac_rep1": "e5_input_rep1",
+        "e5_h3k27ac_rep2": "e5_input_rep2",
     }

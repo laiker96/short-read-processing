@@ -1,152 +1,110 @@
 # short-read-processing
 
-Accession-first Snakemake pipeline for bulk ATAC-seq, TF ChIP-seq, and histone
-ChIP-seq. A CSV or TSV sample sheet is the only user data input: the pipeline
-resolves SRR/SRX/ERR/ERX accessions, downloads FASTQs, prepares `dm6` or `hg38`,
-aligns and filters reads, calls peaks, creates signal tracks, and summarizes QC.
+Snakemake pipeline for accession-to-peaks ATAC-seq and ChIP-seq processing.
+It downloads public runs, prepares `dm6` or `hg38`, processes technical runs in
+parallel, and produces reproducible peak, signal, and QC outputs.
 
-Paired-end ATAC defaults to two complementary peak products in one run:
+![Simplified workflow DAG](docs/workflow-dag.svg)
 
-- MACS3 HMMRATAC accessible regions;
-- lenient MACS3 candidates from `<150 bp` fragments, followed by CPM-based
-  refinement.
+## Current endpoints
 
-For multi-condition paired-end ATAC projects, an optional downstream stage
-builds replicate-supported condition peaks and a bounded nonredundant atlas
-without merging tissue-specific peaks into long chained intervals.
+- **ATAC-seq (default):** two-ended Tn5 insertion sites from proper paired
+  fragments shorter than 150 bp, lenient MACS3 candidates, unscaled qpois
+  signal refinement, context-level pooling, and biological-replicate support.
+- **ATAC-seq (optional):** MACS3 HMMRATAC, followed by the same pooled-context
+  biological-replicate support step. HMMRATAC requires paired-end data.
+- **TF ChIP-seq:** MACS3 narrow peaks and CPM BigWigs.
+- **Histone ChIP-seq:** MACS3 broad peaks and CPM BigWigs.
+- **ChIP controls:** a matched input/control can be named explicitly; IP-only
+  ChIP is also valid and runs without `-c`.
+- **QC:** FastQC before and after trimming, Cutadapt reports, alignment metrics,
+  fragment-aware FRiP, ATAC TSS/fragment profiles, ChIP QC, and MultiQC.
 
-![short-read-processing workflow DAG](docs/workflow-dag.svg)
+Cross-context ATAC integration, H3K27ac integration, and Micro-C integration
+are deliberately outside the current pipeline endpoint. The retained ATAC
+context peaks and per-biosample H3K27ac outputs are the inputs to that later
+atlas stage.
 
-The figure is the Snakemake rule graph for a representative paired-end ATAC
-sample; independent samples and technical lanes expand these same branches in
-parallel.
+## Install
 
-The public entry point is `src/run_pipeline.py`. Acquisition and resolved-config
-generation are restart-safe pre-DAG phases; all reference preparation and read
-processing steps are in `workflow/Snakefile`.
-
-## Requirements
-
-- Linux or a compatible HPC compute node;
-- Mamba or Micromamba;
-- enough disk for compressed FASTQs, references, BAMs, and rule environments;
-- outbound HTTPS for accession/reference downloads, unless inputs and caches
-  have already been staged.
-
-Run commands from the repository root. All environments and workflow caches are
-kept inside the repository:
-
-```text
-.venv/                 orchestration environment
-.micromamba/           optional repo-local Mamba root/cache
-.snakemake/conda/      per-rule bioinformatics environments
-```
-
-These paths are ignored by Git.
-
-## Install the environment
-
-With Mamba:
+All environments remain inside the repository. Create the orchestration
+environment at `.venv`:
 
 ```bash
+git clone git@github.com:laiker96/short-read-processing.git
+cd short-read-processing
+
 export MAMBA_ROOT_PREFIX="$PWD/.micromamba"
-mamba env create --prefix "$PWD/.venv" --file environment.yml
-mamba run --prefix "$PWD/.venv" snakemake --version
+micromamba create --prefix "$PWD/.venv" --file environment.yml -y
 ```
 
-With Micromamba, replace `mamba` with `micromamba`. To update an existing
-environment after `environment.yml` changes:
+Run commands without activation:
 
 ```bash
-export MAMBA_ROOT_PREFIX="$PWD/.micromamba"
-mamba env update --prefix "$PWD/.venv" --file environment.yml --prune
+micromamba run --prefix "$PWD/.venv" python src/run_pipeline.py --help
 ```
 
-The orchestration environment contains Snakemake, download tools, and test
-dependencies. Bowtie2, MACS3, SAMtools, deepTools, FastQC, Cutadapt, MultiQC,
-and the R-based ChIP QC tools are isolated by task under `workflow/envs/`.
-Snakemake creates those environments automatically below `.snakemake/conda` on
-the first run. R packages are not installed into `.venv`.
+Snakemake creates rule-specific environments below `.snakemake/conda` through
+the local profile. Bioinformatics packages are not installed globally.
 
-## Prepare the input sample sheet
+## Input files
 
-The input must be a comma- or tab-separated file following
-[`schemas/sample-sheet.schema.yaml`](schemas/sample-sheet.schema.yaml). Do not
-list local FASTQ paths. One row represents one public run or experiment
-accession; SRX and ERX accessions expand to all associated runs.
+The only required user input is a CSV or TSV following
+[`schemas/sample-sheet.schema.yaml`](schemas/sample-sheet.schema.yaml). One row
+is one public `SRR`, `SRX`, `ERR`, or `ERX` accession.
 
 Required columns:
 
 | Column | Meaning |
 |---|---|
-| `accession` | SRR, SRX, ERR, or ERX identifier |
-| `sample_id` | Biological library ID; repeat for technical runs of the same library |
-| `assay` | `atac`, `chip_tf`, or `chip_histone` |
-| `genome` | `dm6` or `hg38` |
-| `role` | `treatment` or `control` |
-| `control_id` | Matched ChIP control `sample_id`; blank for ATAC, controls, or IP-only ChIP |
-| `replicate` | Positive biological-replicate number |
-| `peak_caller` | `hmmratac`, `callpeak`, or blank for the assay default |
+| `accession` | Public run or experiment accession |
+| `library_id` | Biological-library identifier; repeat it for technical runs |
+| `assay` | `atac`, `h3k27ac`, `chip_tf`, or the `chip_histone` alias |
+| `context` | Tissue, stage, or cell-type ID used for ATAC pooling |
 
-Minimal paired-end ATAC input:
+The smallest valid ATAC table is:
 
-```text
-accession  sample_id       assay  genome  role       control_id  replicate  peak_caller
-ERR3975804 e5_atac_rep1    atac   dm6    treatment              1          hmmratac
-ERR3975777 e5_atac_rep1    atac   dm6    treatment              1          hmmratac
-ERR3975789 e5_atac_rep2    atac   dm6    treatment              2          hmmratac
+```tsv
+accession	library_id	assay	context
+SRR100001	eye_atac_rep1	atac	eye
+SRR100002	eye_atac_rep2	atac	eye
 ```
 
-The first two rows are technical runs because they share `sample_id`; they are
-trimmed and aligned independently, then merged before duplicate marking. The
-third row is a separate biological replicate and remains a separate sample.
+Distinct ATAC `library_id` values in the same `context` are biological
+replicates. The pipeline calls replicate peaks, pools the context, and retains
+pooled peaks supported by the configured number of libraries. Multiple
+accessions sharing one `library_id` are technical runs and merge before
+duplicate marking.
 
-ChIP with an explicit input control uses a control row and links the treatment
-through `control_id`:
+The genome is supplied once with `--genome` and defaults to `dm6`. FASTQ URLs
+and paired/single-end layout are resolved from ENA/SRA. ATAC defaults to the
+two-ended Tn5/MACS3-qpois method; add the optional `peak_caller` column and set
+it to `hmmratac` to choose HMMRATAC.
 
-```text
-accession  sample_id  assay    genome  role       control_id  replicate  peak_caller
-SRR100001  tf_rep1    chip_tf  hg38    treatment  input_rep1  1          callpeak
-SRR100002  input_rep1 chip_tf  hg38    control                1
+H3K27ac is IP-only with the same four columns. For matched inputs, add `role`
+and `control_library`:
+
+```tsv
+accession	library_id	assay	context	role	control_library
+SRR200001	eye_h3_rep1	h3k27ac	eye	treatment	eye_input_rep1
+SRR200002	eye_input_rep1	h3k27ac	eye	control
 ```
 
-IP-only ChIP is supported by leaving `control_id` blank. MACS3 then runs without
-`-c`; control-dependent fingerprint QC is omitted.
+For IP-only ChIP, omit both optional columns. H3K27ac/histone ChIP defaults to
+broad peaks; TF ChIP defaults to narrow peaks. The schema also defines optional
+typed trimming, alignment, MACS3, and HMMRATAC override columns.
 
-Optional typed columns control MACS3/HMMRATAC, trimming, alignment, filtering,
-and adapters. Important examples include:
+## Run
 
-```text
-macs3_format=BAM
-macs3_nomodel=true
-macs3_shift=-75
-macs3_extsize=150
-adapter_preset=custom
-adapter_fasta=resources/adapters/nextera.fa
-```
-
-Free-form shell arguments are deliberately unsupported. Use the named columns
-defined by the schema. Preset defaults are Nextera for ATAC, TruSeq for ChIP,
-Bowtie2 `very-sensitive`, MAPQ 30, duplicate removal, and mitochondrial-read
-removal.
-
-Validate a sheet without downloading data:
+The canonical command validates the tables, downloads FASTQs concurrently,
+writes a resolved YAML, prepares the reference, and starts Snakemake:
 
 ```bash
-mamba run --prefix "$PWD/.venv" \
-  python src/validate_sample_sheet.py samples.tsv
-```
-
-## Run the pipeline locally
-
-This command validates the sheet, downloads FASTQs concurrently, writes the
-resolved YAML, prepares the reference, and runs Snakemake:
-
-```bash
-mamba run --prefix "$PWD/.venv" \
+micromamba run --prefix "$PWD/.venv" \
   python src/run_pipeline.py samples.tsv \
   --project chromatin-study \
   --run-id baseline \
+  --genome dm6 \
   --output-dir data/raw/chromatin-study \
   --reference-root references \
   --cores 24 \
@@ -154,410 +112,188 @@ mamba run --prefix "$PWD/.venv" \
   --connections 8
 ```
 
-The main locations are then:
+One mixed table produces a separate resolved workflow config for each assay.
+ATAC contexts require at least two biological libraries by default, each
+covering at least 50% of a pooled peak. Override these thresholds with
+`--atac-minimum-replicates` and `--atac-overlap-fraction`.
 
-```text
-data/raw/chromatin-study/               downloaded FASTQs and manifest
-configs/chromatin-study.yaml            fully resolved workflow config
-references/<genome>/                    downloaded/prepared reference
-results/chromatin-study/baseline/       final outputs and logs
-work/chromatin-study/baseline/          restartable intermediates
-```
-
-Independent accessions, lanes, and samples run concurrently. `--cores` is the
-aggregate local CPU limit; each rule also declares its own threads and memory.
-For SRA Toolkit fallbacks, `--sra-jobs` controls simultaneous conversions and
-`--threads` is divided among those jobs. For direct ENA transfers,
-`--file-jobs` controls simultaneous files and `--connections` controls HTTP
-range connections per file.
-
-Useful execution boundaries:
+Useful boundaries:
 
 ```bash
-# Resolve and download only
+# Download only
 python src/run_pipeline.py samples.tsv --download-only --output-dir data/raw/project
 
-# Generate YAML from an existing manifest without running Snakemake
+# Reuse completed downloads and only write the resolved YAML
 python src/run_pipeline.py samples.tsv --skip-download \
   --manifest data/raw/project/download_manifest.tsv --config-only
 
-# Inspect the complete DAG without executing jobs
+# Build the DAG without executing jobs
 python src/run_pipeline.py samples.tsv --skip-download \
   --manifest data/raw/project/download_manifest.tsv --snakemake-dry-run
 ```
 
-Run those commands through `mamba run --prefix "$PWD/.venv"` as above.
+Run these through `micromamba run --prefix "$PWD/.venv"` as in the main
+example.
 
-### Run the dm6 atlas inputs
-
-The curated atlas sheets are ready to use:
-
-```bash
-# ATAC: 23 accessions / 22 biological libraries
-mamba run --prefix "$PWD/.venv" \
-  python src/run_pipeline.py resources/atlas_atac_selected.sample_sheet.tsv \
-  --project atlas-atac-dm6 --run-id baseline \
-  --output-dir data/raw/atlas_atac --cores 24 \
-  --atac-atlas-condition-map resources/atlas_atac_conditions.tsv
-
-# H3K27ac: 15 IP-only runs
-mamba run --prefix "$PWD/.venv" \
-  python src/run_pipeline.py resources/atlas_h3k27ac_ip_only.sample_sheet.tsv \
-  --project atlas-h3k27ac-dm6 --run-id baseline \
-  --output-dir data/raw/atlas_h3k27ac --cores 24
-```
-
-The source selection metadata and deterministic sample-sheet generators are
-documented in [`resources/README.md`](resources/README.md).
-
-The optional condition map follows
-[`schemas/atac-atlas-condition-map.schema.yaml`](schemas/atac-atlas-condition-map.schema.yaml).
-It assigns each biological `sample_id` exactly once; technical accessions do
-not appear because they have already been merged into that biological library.
-Atlas defaults are two supporting biological replicates, at least 50% pooled
-peak coverage per supporting replicate, and 250-bp global atlas windows. These
-can be changed with `--atac-atlas-minimum-replicates`,
-`--atac-atlas-overlap-fraction`, and `--atac-atlas-peak-width`.
-
-### Restart or resume
-
-Re-run the same command with the same `project` and `run-id`:
-
-- aria2 resumes managed ENA partial downloads and verifies reported MD5 sums;
-- SRA conversion writes to staging and promotes FASTQs only after completion;
-- manifests and resolved YAMLs are atomic and unchanged files are not replaced;
-- Snakemake skips complete outputs and reruns incomplete jobs;
-- raw FASTQs and completed canonical BAMs are never overwritten by downstream
-  rules.
-
-To reuse completed downloads explicitly, add:
+### Curated dm6 inputs
 
 ```bash
---skip-download --manifest data/raw/project/download_manifest.tsv
+# Current atlas selection: ATAC plus IP-only H3K27ac
+micromamba run --prefix "$PWD/.venv" \
+  python src/run_pipeline.py resources/atlas_samples_ip_only.tsv \
+  --project drosophila-atlas --run-id ip-only --genome dm6 \
+  --output-dir data/raw/drosophila-atlas \
+  --cores 24
+
+# Alternative table containing available matched H3K27ac inputs
+micromamba run --prefix "$PWD/.venv" \
+  python src/run_pipeline.py resources/atlas_samples_with_inputs.tsv \
+  --project drosophila-atlas --run-id matched-inputs --genome dm6 \
+  --output-dir data/raw/drosophila-atlas \
+  --cores 24
 ```
 
-Use a new `run-id` when changing scientific parameters so previous results are
-preserved. The ATAC short-fragment refinement defaults are recorded in the
-resolved YAML under `atac_refinement`.
+Selection provenance is documented in
+[`resources/README.md`](resources/README.md).
 
-## Reference preparation
+## ATAC default method
 
-Generated `dm6` and `hg38` configurations include checksum-pinned reference
-sources. The Snakemake DAG downloads and prepares:
+For paired-end ATAC, each biological library is processed as follows:
 
-```text
-references/<genome>/<genome>.fa
-references/<genome>/<genome>.fa.fai
-references/<genome>/<genome>.chrom.sizes
-references/<genome>/<genome>.blacklist.bed
-references/<genome>/<genome>.tss.bed
-references/<genome>/<genome>.autosomes.txt
-references/<genome>/bowtie2/<genome>.*.bt2
-references/<genome>/sources/*
-```
+1. Retain proper, nonduplicate alignments with `0 < |TLEN| < 150`.
+2. Apply the Tn5 offsets with `alignmentSieve --ATACshift`.
+3. Convert both shifted mates to one-base insertion records.
+4. Run MACS3 `callpeak -f BED -q 0.10 --nomodel --shift -75 --extsize
+   150 --keep-dup all -B`.
+5. Run `macs3 bdgcmp -m qpois` on the unscaled treatment pileup and local
+   lambda. `--SPMR` is intentionally not used in this branch.
+6. Progress from qpois exponent 2 through 325 and retain components 50–400 bp;
+   broader components split as the threshold rises.
+7. Concatenate replicate insertion records within each context and repeat
+   candidate calling and refinement on the pool.
+8. Retain a pooled peak when the configured number of replicate peak sets each
+   cover the configured fraction of its bases.
 
-A hand-written resolved YAML may omit `reference.preparation` and point to
-existing local assets. FASTA indexing, chromosome sizes, and missing Bowtie2
-indexes remain workflow targets.
+Single-end ATAC follows the same insertion/qpois path without the unavailable
+paired-fragment-length filter. HMMRATAC is an explicit paired-end alternative.
 
 ## Outputs
 
-Each run writes below `results/<project>/<run-id>/`:
+Each run is namespaced below `results/<project>/<run-id>/`.
+
+ATAC context endpoints (the directory remains named `conditions` internally):
 
 ```text
-bam/
-  <sample>.final.bam[.bai]             filtered canonical alignments
+atac/conditions/<context>/
+  peaks/
+    <context>.candidates.narrowPeak
+    <context>.qpois-refined.bed
+    <context>.qpois-excluded.bed
+    <context>.qpois-refinement.json
+    <context>.replicate-supported.bed       primary ATAC endpoint
+    <context>.replicate-support.tsv
+    <context>.replicate-support.json
+  tracks/
+    <context>.MACS3-pileup.unscaled.bw
+    <context>.qpois.bw
+```
 
+For HMMRATAC contexts, the pooled files are
+`<context>.hmmratac.narrowPeak`, `<context>.CPM.bw`, and the same
+`replicate-supported` BED/TSV/JSON outputs.
+
+Qpois-refined BEDs contain BED6 followed by maximum qpois score and selection
+exponent. Replicate-supported BEDs contain BED6 followed by `condition_id`,
+`support_n`, `replicate_n`, `support_fraction`, comma-separated supporting
+library IDs, and `peak_method`.
+
+ChIP endpoints:
+
+```text
 peaks/<sample>/
-  *_accessible_regions.narrowPeak      HMMRATAC ATAC peaks
-  *_peaks.narrowPeak                   MACS3 narrow peaks
-  *_peaks.broadPeak                    MACS3 broad histone peaks
-  *_treat_pileup.bdg                   callpeak treatment signal
-  *_control_lambda.bdg                 callpeak local background
-
-tracks/
-  <sample>.CPM.bw                      unshifted CPM coverage
-  <sample>.Tn5-shifted.CPM.bw          ATAC insertion-oriented coverage
-
-atac_short_fragments/
-  bam/*.fragments-lt150.bam[.bai]      proper pairs with 0 < |TLEN| < 150
-  tracks/*.Tn5-shifted.CPM.bw          CPM within the retained subset
-  macs3/<sample>/*_peaks.narrowPeak    lenient q=0.10 candidates
-  macs3/<sample>/*_{treat_pileup,control_lambda}.bdg
-  refined/*.CPM-refined.bed            50-400 bp signal-refined peaks
-  refined/*.Excluded.bed               lowest-cutoff unselected signal intervals
-  refined/*.stats.json                 refinement status, counts, and thresholds
-  qc/*.fragment-filter.tsv             retained-fragment statistics
-
-atac_atlas/
-  conditions/<condition>/bam/          restartable pooled short-fragment BAM and index
-  conditions/<condition>/              pooled candidates, CPM track, and refinement
-  conditions/<condition>/*.consensus.bed
-                                       replicate-supported condition peaks
-  conditions/<condition>/*.support.tsv per-replicate pooled-peak coverage
-  atlas.peaks.bed                      bounded non-overlapping global atlas
-  atlas.variable.peaks.bed             condition-balanced variable boundaries
-  atlas.membership.tsv                 source peak-to-atlas assignments
-  atlas.presence.tsv                   condition presence matrix
-  atlas.coverage_fraction.tsv          condition peak coverage matrix
-  atlas.mean_cpm.tsv                   mean condition CPM matrix
-  atlas.maximum_cpm.tsv                maximum condition CPM matrix
-  atlas.stats.json                     method, parameters, and counts
-  atlas.narrow-first.anchors250.bed     narrow-source-first fixed anchors
-  atlas.narrow-first.variable.peaks.bed condition-balanced boundaries for those anchors
-  atlas.narrow-first.*.tsv/json         membership, matrices, and provenance
-  atlas.dhs-support-fraction.bw         fraction of conditions with a DHS at each base
-  atlas.fwhm-boundaries.bed             anchor-centered DHS-support half-maximum widths
-  atlas.fwhm-diagnostics.tsv            support and neighbor-contact diagnostics
-  atlas.fwhm.stats.json                 FWHM method and summary counts
-  atlas.center-mode-half-prominence-boundaries.bed
-                                       center-associated local support modes
-  atlas.center-mode-half-prominence-*.tsv/json
-                                       local-mode prominence diagnostics and summary
-  atlas.dhs-driven.anchors250.bed       post-grouping measurement anchors
-  atlas.dhs-driven.peaks.bed            direct DHS-seed consensus boundaries
-  atlas.dhs-driven.*.tsv/json           DHS-driven membership, matrices, and provenance
-  atlas.dhs-driven.signal-shaped.peaks.bed
-                                       contributor-aware signal boundaries
-  atlas.dhs-driven.aggregate-shape.bw   normalized aggregate shape signal
-  atlas.dhs-driven.signal-shape.tsv     per-element boundary diagnostics
-  atlas.dhs-driven.signal-shape.stats.json
-                                       shape parameters and summary counts
-
-qc/
-  fastqc/raw/ and fastqc/trimmed/       per-FASTQ FastQC reports
-  cutadapt/                             trimming JSON
-  alignment/                            flagstat, stats, and idxstats
-  frip/                                 numerator, denominator, and FRiP
-  tss/ and fragments/                   ATAC TSS and fragment-size QC
-  chip/                                 ChIP fingerprint/cross-correlation
-  metrics.tsv and metrics.json          stable machine-readable summary
-  multiqc/multiqc_report.html           aggregate report
-
-provenance/resolved_config.json         resolved run configuration
-logs/                                   commands and tool logs by stage
+  <sample>_peaks.narrowPeak       TF ChIP
+  <sample>_peaks.broadPeak        histone ChIP
+  <sample>_treat_pileup.bdg
+  <sample>_control_lambda.bdg
+tracks/<sample>.CPM.bw
 ```
 
-MACS3 `callpeak` uses `-B --SPMR`, so both treatment and control-lambda
-bedGraphs are declared outputs. Paired-end ATAC defaults to HMMRATAC for its
-primary peaks. The additional short-fragment branch uses MACS3 `-f BAM
---nomodel --shift -75 --extsize 150 -q 0.10 --keep-dup all`, followed by a mean
-CPM floor of 2 and 50-400 bp geometry. CPM-refined scores are signal-derived;
-they are not q-values or an independent FDR estimate.
-Observed positive CPM cutoffs are evaluated from high to low. Qualifying
-high-signal modes expand as the cutoff falls; when a lower-signal bridge would
-merge established modes, the lower mode must have at least 25% prominence
-relative to the saddle: `(lower summit - saddle) / lower summit >= 0.25`.
-Shallower subdivisions are merged and continue expanding as one component;
-prominent modes retain their last separate boundaries. This can split a broad
-MACS3 candidate without treating small reproducible fluctuations as separate
-peaks or forcing every mode to the 50-bp minimum. The prominence threshold,
-algorithm identifier, and threshold rule are recorded in each refinement stats
-JSON.
-If a sample has no MACS3 candidates or no contained positive signal, refinement
-writes valid empty BED files and records the reason in the stats `status` field.
+ChIP `callpeak` uses `-B --SPMR`; `-c` is added only when `control_library` is
+present. Alignment BAMs are retained for reproducible downstream reruns, while
+replicate-only ATAC peak evidence and insertion files live below `work/`.
 
-### ATAC consensus and global atlas method
+Shared outputs include:
 
-The atlas branch is optional and valid only for paired-end ATAC. For each
-condition, it merges the already filtered `<150 bp` biological-replicate BAMs,
-recomputes the pooled Tn5-shifted CPM track, calls lenient MACS3 candidates, and
-applies the same CPM refinement. A pooled refined peak is retained when at
-least the configured number of biological replicates cover the configured
-fraction of its bases. The default is two replicates covering at least 50%.
-
-Across conditions, peaks are centered on their maximum pooled CPM bin and
-converted to fixed-width windows. Candidates are ranked by maximum-CPM
-percentile within each condition. The highest-ranked window is retained, all
-windows directly overlapping it are assigned to it and removed, and selection
-continues iteratively. Boundaries are never unioned, preventing overlap chains
-from creating large peaks. Tissue specificity is preserved in the membership,
-presence, coverage-fraction, and CPM matrices; a peak does not need to occur in
-multiple tissues. This is implemented in Python and uses the existing
-`atac_qc` environment—no ArchR or additional R packages are installed.
-
-`atlas.variable.peaks.bed` preserves the same atlas IDs but estimates biological
-boundaries from the assigned condition peaks. Each condition contributes at
-most one vote (its strongest assigned peak); the output uses the unweighted
-median start and end. A peak seen in one condition keeps that condition's
-boundaries. Direct overlaps between neighboring variable intervals are split
-midway only when both intervals remain at least 50 bp; otherwise both variable
-records are retained as overlapping evidence, without interval union or
-chaining. The fixed non-overlapping anchors remain the coordinate system for
-the quantitative matrices.
-
-The narrow-source-first comparison keeps the same 250-bp non-overlap rule but
-changes seed ordering. Original refined DHS width is considered before signal
-priority, so a broad DHS whose fixed window bridges two non-overlapping narrow
-DHS windows cannot eliminate both smaller modes. After anchors are selected,
-every source DHS is annotated to every retained 250-bp anchor its candidate
-window overlaps. A broad unresolved DHS can therefore support both smaller
-atlas elements. This is emitted under `atlas.narrow-first.*` and does not
-replace the canonical signal-prioritized fixed atlas.
-
-The DHS-support boundary model uses all replicate-supported condition DHSs,
-independently of ATAC coverage amplitude. Overlapping DHSs are first unioned
-within each condition, so a condition contributes at most one vote per base.
-`atlas.dhs-support-fraction.bw` is the resulting number of supporting
-conditions divided by the total number of conditions. For each fixed 250-bp
-anchor, the method selects the maximum support inside the anchor nearest its
-center, calculates `ceil(maximum / 2)`, and reports the connected support
-component containing that maximum as `atlas.fwhm-boundaries.bed`. Consequently,
-a tissue-specific element is not diluted by absent tissues: support one has a
-half-maximum requirement of one. No width cap, interval merge, or forced
-neighbor split is applied. Components that reach another anchor or bridge to a
-higher-support peak are retained and explicitly flagged in the diagnostics.
-Because the input is a discrete condition-support track, this is a
-half-maximum support width rather than classical FWHM of a smooth signal.
-
-The center-mode alternative addresses adjacent support peaks without changing
-the support track or fixed anchors. It identifies local DHS-support maxima
-inside each anchor, selects the mode nearest the anchor center even when it is
-lower than another mode, and measures that mode at half prominence. Prominence
-uses the higher of the left and right valley bases encountered before a taller
-peak or a zero-support gap. This raises the contour above an intervening valley
-and prevents the selected smaller mode from inheriting a connected taller
-neighbor. It is emitted separately for direct comparison with ordinary FWHM.
-
-The parallel DHS-driven atlas starts from the same tissue consensus DHSs but
-does not use fixed windows to establish membership. The strongest remaining DHS
-is a seed; another DHS joins it only when the original intervals overlap and
-the summit of either DHS lies inside the other interval. Members never recruit
-additional members, so an overlap chain cannot bridge two seeds. Median
-condition boundaries define `atlas.dhs-driven.peaks.bed`; 250-bp measurement
-anchors are created only afterward. Separate membership, CPM, coverage, and
-presence outputs allow direct comparison with the fixed-window grouping.
-
-The final signal-shaping step keeps this DHS-driven membership unchanged. For
-each atlas element, it selects the strongest assigned DHS per contributing
-condition and extracts that condition's pooled short-fragment CPM profile in a
-1-kb window. Profiles are binned at 10 bp, smoothed over 30 bp, divided by
-their maximum inside the assigned source DHS (and capped at 1), and combined
-with an equal-weight median. The selected aggregate summit must also overlap a
-contributing source DHS, preventing a stronger neighboring element from
-capturing the boundary. Thus a
-tissue-specific element uses its one observed tissue and is not diluted by
-zero signal from other tissues; no tissue gains extra weight from sequencing
-depth or additional source peaks. The boundary is the component containing the
-aggregate maximum above both 20% of that maximum and a robust local-background
-threshold (median + 3 scaled MAD), constrained to 50-400 bp. Strong secondary
-modes are reported in `atlas.dhs-driven.signal-shape.tsv` but are not bridged
-into the primary element.
-
-`atlas.dhs-driven.aggregate-shape.bw` records the locally normalized aggregate
-used for boundary selection (range 0-1 within shaped elements). It is a shape
-comparison track, not CPM and not a pooled read-depth measurement. Absolute
-per-condition CPM remains in the condition BigWigs and atlas CPM matrices.
-
-### Build an IGV session
-
-Create a portable session containing each ATAC short-fragment CPM track, its
-lenient narrowPeak candidates, its refined peaks, and optional matching
-H3K27ac CPM tracks:
-
-```bash
-mamba run --prefix "$PWD/.venv" \
-  python src/build_igv_session.py \
-  results/atlas-atac-dm6/baseline/atac_short_fragments \
-  --h3k27ac-tracks results/atlas-h3k27ac-dm6/baseline/tracks \
-  --output results/atlas-atac-dm6/baseline/atlas.igv.xml \
-  --genome dm6
+```text
+bam/                         filtered, indexed alignments
+qc/fastqc/                   raw and trimmed FastQC
+qc/cutadapt/                 trimming reports
+qc/alignment/                SAMtools statistics
+qc/frip/                     numerator, denominator, and FRiP
+qc/tss/ and qc/fragments/    ATAC QC
+qc/chip/                     ChIP fingerprint/cross-correlation
+qc/metrics.tsv and .json     stable machine-readable summary
+qc/multiqc/                  aggregate HTML report
+provenance/resolved_config.json
+logs/
 ```
 
-Add narrow-source-first anchors and boundaries, the condition DHS-support
-track, ordinary FWHM, center-mode half-prominence boundaries, DHS-driven
-anchors, median DHS boundaries, contributor-normalized aggregate signal, and
-signal-shaped boundaries with:
+## Restartability and parallelism
+
+Re-run the identical command to resume:
+
+- aria2 resumes partial ENA downloads and validates reported checksums;
+- SRA conversion promotes FASTQs only after successful completion;
+- reference preparation and every processing stage are Snakemake outputs;
+- temporary scientific outputs are written in staging paths before promotion;
+- completed alignments are reused when peak parameters change;
+- a changed scientific parameter set should use a new `run-id`.
+
+Independent accessions, technical lanes, biological libraries, and contexts
+are separate jobs. `--cores` limits aggregate CPU usage; each rule separately
+declares threads and memory. For downloads, `--file-jobs` is concurrent files
+and `--connections` is segmented connections per file.
+
+## SLURM
+
+All site-specific launchers and profiles belong under the ignored `slurm/`
+directory. Do not run downloads, alignment, peak calling, or environment
+installation on a login node.
 
 ```bash
-mamba run --prefix "$PWD/.venv" \
-  python src/build_igv_session.py \
-  results/atlas-atac-dm6/hmmratac/atac_atlas \
-  --condition-atlas --include-dhs-driven \
-  --output results/atlas-atac-dm6/hmmratac/atac_atlas/atlas-dhs-driven-comparison.igv.xml \
-  --genome dm6
-```
-
-The XML uses paths relative to the session file, so move the session and its
-track files together.
-
-For the pooled condition atlas, create a session containing each condition's
-ATAC CPM signal and replicate-supported consensus peaks, followed by the fixed
-and variable global atlas tracks:
-
-```bash
-mamba run --prefix "$PWD/.venv" \
-  python src/build_igv_session.py \
-  results/atlas-atac-dm6/hmmratac/atac_atlas \
-  --condition-atlas \
-  --output results/atlas-atac-dm6/hmmratac/atac_atlas/atlas-condition-consensus.igv.xml \
-  --genome dm6
-```
-
-## Run on SLURM
-
-Workflow rules are executor-independent and expose `threads` and `mem_mb`.
-Keep site-specific SBATCH launchers, accounts, partitions, paths, and Snakemake
-SLURM profiles under the ignored `slurm/` directory. Never run downloads,
-alignment, or peak calling on a cluster login node.
-
-A local shared-filesystem profile can be passed with:
-
-```bash
-mamba run --prefix "$PWD/.venv" \
+micromamba run --prefix "$PWD/.venv" \
   python src/run_pipeline.py samples.tsv \
   --workflow-profile slurm/profile \
   --jobs 50 --cores 200 --max-threads 16
 ```
 
-Here, `--jobs` caps submitted/running jobs, `--cores` caps their aggregate CPU
-requests, and `--max-threads` caps any one rule. Cluster-specific values belong
-in the ignored profile rather than the portable workflow.
+`--jobs` caps submitted/running jobs, `--cores` caps aggregate requested CPUs,
+and `--max-threads` caps one rule. Cluster hostnames, accounts, partitions, and
+paths must remain in ignored files under `slurm/`.
 
-## Standalone acquisition and configuration
+## IGV session
 
-The one-command entry point is preferred, but phases can be run separately:
+Build a portable session from the final ATAC contexts and optional ChIP run:
 
 ```bash
-# One accession or experiment
-python src/download_accession.py SRX017289 --output-dir data/raw
-
-# Every accession in a canonical sheet
-python src/download_batch.py samples.tsv --output-dir data/raw
-
-# Resolve YAML from a completed manifest
-python src/write_pipeline_configs.py samples.tsv \
-  --manifest data/raw/download_manifest.tsv \
-  --project chromatin-study --run-id baseline
+micromamba run --prefix "$PWD/.venv" \
+  python src/build_igv_session.py \
+  results/drosophila-atlas.atac.dm6/ip-only/atac \
+  --chip-root results/drosophila-atlas.chip_histone.dm6/ip-only \
+  --output results/atlas.igv.xml --genome dm6
 ```
 
-Use the repository environment for each command.
-
-## Tests and workflow validation
+## Verification
 
 ```bash
 export MAMBA_ROOT_PREFIX="$PWD/.micromamba"
+export XDG_CACHE_HOME="$PWD/.cache"
 
-mamba run --prefix "$PWD/.venv" pytest -q
-
-mamba run --prefix "$PWD/.venv" \
+micromamba run --prefix "$PWD/.venv" pytest -q
+micromamba run --prefix "$PWD/.venv" \
   snakemake --snakefile workflow/Snakefile \
   --configfile tests/fixtures/workflow_config.yaml --lint
-
-mamba run --prefix "$PWD/.venv" \
+micromamba run --prefix "$PWD/.venv" \
   snakemake --snakefile workflow/Snakefile \
-  --configfile tests/fixtures/workflow_config.yaml --cores 8 --dry-run
+  --configfile docs/workflow-dag.config.yaml --cores 16 --dry-run
 ```
-
-Regenerate the embedded representative ATAC rule graph after changing workflow
-dependencies:
-
-```bash
-XDG_CACHE_HOME="$PWD/.cache" \
-  .venv/bin/snakemake --snakefile workflow/Snakefile \
-  --configfile docs/workflow-dag.config.yaml --rulegraph \
-  | .venv/bin/dot -Tsvg -o docs/workflow-dag.svg
-```
-
-See [`PLAN.md`](PLAN.md) for design decisions and [`AGENTS.md`](AGENTS.md) for
-repository-specific contribution rules.

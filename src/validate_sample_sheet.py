@@ -18,12 +18,12 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = read_sample_sheet(args.sample_sheet, schema_path=args.schema)
-    samples = {str(row["sample_id"]) for row in rows}
+    samples = {str(row["library_id"]) for row in rows}
     assays = Counter(str(row["assay"]) for row in rows)
     callers = Counter(
         str(row["peak_caller"]) for row in rows if str(row["role"]) == "treatment"
     )
-    print(f"valid: {len(rows)} accession row(s), {len(samples)} biological sample(s)")
+    print(f"valid: {len(rows)} accession row(s), {len(samples)} biological library/libraries")
     print("assays: " + ", ".join(f"{key}={value}" for key, value in sorted(assays.items())))
     print("treatment peak callers: " + ", ".join(
         f"{key}={value}" for key, value in sorted(callers.items())

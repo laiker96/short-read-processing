@@ -11,23 +11,17 @@ from .accessions import AcquisitionError
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 CHECKSUM_RE = re.compile(r"^(?:md5:[0-9a-f]{32}|sha256:[0-9a-f]{64})$")
-ATAC_REFINEMENT_FIELDS = {
-    "enabled",
+ATAC_QPOIS_FIELDS = {
     "fragment_maximum",
-    "macs3_qvalue",
-    "macs3_shift",
-    "macs3_extsize",
-    "bigwig_bin_size",
-    "minimum_mean_cpm",
-    "minimum_mode_prominence",
-    "merge_gap_bp",
+    "minimum_exponent",
+    "maximum_exponent",
+    "merge_gap",
     "minimum_length",
     "maximum_length",
 }
-ATAC_ATLAS_FIELDS = {
+ATAC_CONSENSUS_FIELDS = {
     "enabled",
-    "condition_map",
-    "peak_width",
+    "conditions",
     "minimum_replicates",
     "replicate_overlap_fraction",
 }
@@ -49,6 +43,13 @@ def wildcard_regex(values: list[str]) -> str:
     return "(?:" + "|".join(re.escape(value) for value in values) + ")" if values else r"(?!)"
 
 
+def aria2_checksum(source: dict[str, Any]) -> str:
+    """Translate a catalog checksum into aria2's ALGORITHM=DIGEST form."""
+
+    algorithm, digest = str(source["checksum"]).split(":", 1)
+    return f"{'sha-256' if algorithm == 'sha256' else algorithm}={digest}"
+
+
 def _required(mapping: dict[str, Any], fields: set[str], label: str) -> None:
     missing = sorted(field for field in fields if field not in mapping or mapping[field] is None)
     if missing:
@@ -64,37 +65,36 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
             raise AcquisitionError(f"Invalid {field}: {config[field]!r}")
     if config["assay"] not in {"atac", "chip_tf", "chip_histone"}:
         raise AcquisitionError(f"Unsupported assay: {config['assay']!r}")
-    refinement = config.get("atac_refinement")
-    if refinement is not None:
-        if config["assay"] != "atac" or not isinstance(refinement, dict):
-            raise AcquisitionError("atac_refinement is only valid for ATAC configurations")
-        _required(refinement, ATAC_REFINEMENT_FIELDS, "ATAC refinement")
+    qpois = config.get("atac_qpois")
+    if config["assay"] == "atac" and not isinstance(qpois, dict):
+        raise AcquisitionError("ATAC configurations require atac_qpois parameters")
+    if qpois is not None:
+        if config["assay"] != "atac" or not isinstance(qpois, dict):
+            raise AcquisitionError("atac_qpois is only valid for ATAC configurations")
+        _required(qpois, ATAC_QPOIS_FIELDS, "ATAC qpois")
         if (
-            int(refinement["fragment_maximum"]) < 2
-            or not 0 < float(refinement["macs3_qvalue"]) <= 1
-            or int(refinement["macs3_extsize"]) < 1
-            or int(refinement["bigwig_bin_size"]) < 1
-            or float(refinement["minimum_mean_cpm"]) < 0
-            or not 0 <= float(refinement["minimum_mode_prominence"]) <= 1
-            or int(refinement["merge_gap_bp"]) < 0
-            or int(refinement["minimum_length"]) < 1
-            or int(refinement["maximum_length"]) < int(refinement["minimum_length"])
+            int(qpois["fragment_maximum"]) < 2
+            or int(qpois["minimum_exponent"]) < 0
+            or int(qpois["maximum_exponent"]) < int(qpois["minimum_exponent"])
+            or int(qpois["merge_gap"]) < 0
+            or int(qpois["minimum_length"]) < 1
+            or int(qpois["maximum_length"]) < int(qpois["minimum_length"])
         ):
-            raise AcquisitionError("ATAC refinement parameters are invalid")
-    atlas = config.get("atac_atlas")
-    if atlas is not None:
-        if config["assay"] != "atac" or not isinstance(atlas, dict):
-            raise AcquisitionError("atac_atlas is only valid for ATAC configurations")
-        _required(atlas, ATAC_ATLAS_FIELDS, "ATAC atlas")
-        if not isinstance(atlas["enabled"], bool):
-            raise AcquisitionError("ATAC atlas enabled must be true or false")
+            raise AcquisitionError("ATAC qpois parameters are invalid")
+    consensus = config.get("atac_consensus")
+    if consensus is not None:
+        if config["assay"] != "atac" or not isinstance(consensus, dict):
+            raise AcquisitionError("atac_consensus is only valid for ATAC configurations")
+        _required(consensus, ATAC_CONSENSUS_FIELDS, "ATAC consensus")
+        if not isinstance(consensus["enabled"], bool):
+            raise AcquisitionError("ATAC consensus enabled must be true or false")
         if (
-            int(atlas["peak_width"]) < 1
-            or int(atlas["minimum_replicates"]) < 2
-            or not 0 < float(atlas["replicate_overlap_fraction"]) <= 1
-            or not str(atlas["condition_map"])
+            int(consensus["minimum_replicates"]) < 2
+            or not 0 < float(consensus["replicate_overlap_fraction"]) <= 1
+            or not isinstance(consensus["conditions"], list)
+            or not consensus["conditions"]
         ):
-            raise AcquisitionError("ATAC atlas parameters are invalid")
+            raise AcquisitionError("ATAC consensus parameters are invalid")
     if not isinstance(config["reference"], dict):
         raise AcquisitionError("reference must be a mapping")
     _required(config["reference"], REFERENCE_FIELDS, "Reference")
@@ -133,14 +133,17 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
     if len(sample_ids) != len(set(sample_ids)):
         raise AcquisitionError("Sample IDs must be unique")
     role_by_id = {str(sample["id"]): sample.get("role") for sample in samples}
+    context_by_id = {str(sample["id"]): str(sample.get("context", "")) for sample in samples}
 
     for sample in samples:
         sample_id = str(sample["id"])
         _required(
             sample,
-            {"accessions", "replicate", "role", "layout", "r1", "parameters"},
+            {"accessions", "context", "role", "layout", "r1", "parameters"},
             f"Sample {sample_id}",
         )
+        if not SAFE_ID_RE.fullmatch(str(sample["context"])):
+            raise AcquisitionError(f"Sample {sample_id}: invalid context")
         if sample["role"] not in {"treatment", "control"}:
             raise AcquisitionError(f"Sample {sample_id}: invalid role")
         if sample["layout"] not in {"single", "paired"}:
@@ -168,23 +171,59 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
                     {"format", "qvalue", "broad", "nomodel", "write_bedgraph", "spmr"},
                     f"Sample {sample_id} callpeak",
                 )
-                if not peak["write_bedgraph"] or not peak["spmr"]:
+                if config["assay"] == "atac":
+                    if (
+                        peak.get("mode") != "tn5_qpois"
+                        or peak["format"] != "BED"
+                        or peak["broad"]
+                        or not peak["nomodel"]
+                        or not peak["write_bedgraph"]
+                        or peak["spmr"]
+                        or peak.get("shift") is None
+                        or peak.get("extsize") is None
+                    ):
+                        raise AcquisitionError(
+                            f"Sample {sample_id}: invalid two-ended Tn5 qpois configuration"
+                        )
+                elif not peak["write_bedgraph"] or not peak["spmr"]:
                     raise AcquisitionError(
-                        f"Sample {sample_id}: callpeak must write -B --SPMR bedGraphs"
+                        f"Sample {sample_id}: ChIP callpeak must write -B --SPMR bedGraphs"
                     )
 
         if config["assay"].startswith("chip") and sample["role"] == "treatment":
             control = str(sample.get("control") or "")
             if control and role_by_id.get(control) != "control":
                 raise AcquisitionError(f"Sample {sample_id}: invalid matched ChIP control")
+            if control and context_by_id[control] != str(sample["context"]):
+                raise AcquisitionError(
+                    f"Sample {sample_id}: treatment and control contexts differ"
+                )
         if config["assay"] == "atac" and sample["role"] != "treatment":
             raise AcquisitionError("ATAC configurations cannot contain control samples")
 
-    if atlas and atlas["enabled"]:
-        if refinement is not None and not refinement["enabled"]:
-            raise AcquisitionError("ATAC atlas requires atac_refinement.enabled=true")
-        if any(sample["layout"] != "paired" for sample in samples):
-            raise AcquisitionError("ATAC atlas requires paired-end biological libraries")
+    if consensus and consensus["enabled"] and config["assay"] != "atac":
+        raise AcquisitionError("ATAC consensus requires an ATAC configuration")
+    if consensus and consensus["enabled"]:
+        from .consensus import condition_specs
+
+        specifications = condition_specs(
+            consensus["conditions"],
+            sample_ids=[
+                sample_id
+                for sample_id in sample_ids
+                if role_by_id[sample_id] == "treatment"
+            ],
+            minimum_replicates=int(consensus["minimum_replicates"]),
+        )
+        for specification in specifications:
+            contexts = {
+                context_by_id[sample_id] for sample_id in specification.samples
+            }
+            if contexts != {specification.condition_id}:
+                raise AcquisitionError(
+                    f"ATAC condition {specification.condition_id!r} does not match "
+                    "its sample contexts"
+                )
 
 
 def resolve_input_paths(config: dict[str, Any], base: Path) -> None:
@@ -208,11 +247,3 @@ def resolve_input_paths(config: dict[str, Any], base: Path) -> None:
             sample["parameters"]["trimming"]["adapter_fasta"] = str(
                 path if path.is_absolute() else (base / path).resolve()
             )
-    atlas = config.get("atac_atlas")
-    if atlas:
-        condition_map = Path(atlas["condition_map"])
-        atlas["condition_map"] = str(
-            condition_map
-            if condition_map.is_absolute()
-            else (base / condition_map).resolve()
-        )

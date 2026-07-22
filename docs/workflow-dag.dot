@@ -1,0 +1,24 @@
+digraph workflow {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.25, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11,
+        color="#40566b", fillcolor="#f4f7fa", margin="0.13,0.08"];
+  edge [color="#607d8b", arrowsize=0.7];
+
+  accessions [label="Accession + library + assay + context"];
+  download [label="Parallel FASTQ download"];
+  preprocess [label="FastQC + Cutadapt"];
+  align [label="Bowtie2 + BAM processing"];
+  atac [label="ATAC replicate peaks\nTn5/MACS3-qpois (default)\nor HMMRATAC", fillcolor="#e8f4ff"];
+  pool [label="Pool biological libraries\nwithin each context", fillcolor="#e8f4ff"];
+  consensus [label="Replicate-supported\ncontext ATAC peaks", fillcolor="#dff3e5"];
+  chip [label="MACS3 ChIP peaks\noptional matched input", fillcolor="#fff2df"];
+  chipout [label="Per-biosample ChIP\npeaks + CPM BigWig", fillcolor="#fff2df"];
+  qc [label="FRiP + assay QC + MultiQC", fillcolor="#f1e9fa"];
+
+  accessions -> download -> preprocess -> align;
+  align -> atac -> pool -> consensus;
+  align -> chip -> chipout;
+  align -> qc;
+  consensus -> qc;
+  chipout -> qc;
+}

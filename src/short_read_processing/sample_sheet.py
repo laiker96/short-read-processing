@@ -14,6 +14,7 @@ from .accessions import AcquisitionError, normalize_accession
 
 DEFAULT_SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "sample-sheet.schema.yaml"
 TECHNICAL_RUN_FIELDS = {"accession", "notes"}
+ASSAY_ALIASES = {"h3k27ac": "chip_histone"}
 MACS3_FIELDS = {
     "macs3_format",
     "macs3_qvalue",
@@ -169,9 +170,9 @@ def _resolve_defaults(row: dict[str, Any], schema: dict[str, Any], *, line: int)
                 )
             row["macs3_broad_cutoff"] = None
         if row["macs3_shift"] is not None or row["macs3_extsize"] is not None:
-            if row["macs3_format"] != "BAM":
+            if assay != "atac" and row["macs3_format"] != "BAM":
                 raise AcquisitionError(
-                    f"Line {line}: macs3_shift/extsize requires macs3_format=BAM"
+                    f"Line {line}: ChIP macs3_shift/extsize requires macs3_format=BAM"
                 )
             if row["macs3_extsize"] is None:
                 raise AcquisitionError(f"Line {line}: macs3_shift requires macs3_extsize")
@@ -188,7 +189,7 @@ def _resolve_defaults(row: dict[str, Any], schema: dict[str, Any], *, line: int)
 
 
 def _validate_relationships(rows: list[dict[str, Any]], canonical_fields: set[str]) -> None:
-    by_sample: dict[str, list[dict[str, Any]]] = {}
+    by_library: dict[str, list[dict[str, Any]]] = {}
     accession_lines: dict[str, int] = {}
     for row in rows:
         accession = str(row["accession"])
@@ -198,11 +199,11 @@ def _validate_relationships(rows: list[dict[str, Any]], canonical_fields: set[st
                 f"first seen on line {accession_lines[accession]}"
             )
         accession_lines[accession] = int(row["__line__"])
-        by_sample.setdefault(str(row["sample_id"]), []).append(row)
+        by_library.setdefault(str(row["library_id"]), []).append(row)
 
-    for sample_id, sample_rows in by_sample.items():
-        first = sample_rows[0]
-        for row in sample_rows[1:]:
+    for library_id, library_rows in by_library.items():
+        first = library_rows[0]
+        for row in library_rows[1:]:
             mismatches = [
                 field
                 for field in canonical_fields
@@ -211,30 +212,36 @@ def _validate_relationships(rows: list[dict[str, Any]], canonical_fields: set[st
             ]
             if mismatches:
                 raise AcquisitionError(
-                    f"Rows for sample_id {sample_id!r} disagree on: " + ", ".join(mismatches)
+                    f"Rows for library_id {library_id!r} disagree on: "
+                    + ", ".join(mismatches)
                 )
 
-    role_by_sample = {sample_id: str(items[0]["role"]) for sample_id, items in by_sample.items()}
+    role_by_library = {
+        library_id: str(items[0]["role"]) for library_id, items in by_library.items()
+    }
     for row in rows:
         assay = str(row["assay"])
         role = str(row["role"])
-        control_id = row.get("control_id")
+        control_library = row.get("control_library")
         line = row["__line__"]
-        if assay == "atac" and (role != "treatment" or control_id):
+        if assay == "atac" and (role != "treatment" or control_library):
             raise AcquisitionError(
-                f"Line {line}: ATAC rows must have role=treatment and blank control_id"
+                f"Line {line}: ATAC rows must have role=treatment and blank control_library"
             )
-        if assay.startswith("chip") and role == "control" and control_id:
-            raise AcquisitionError(f"Line {line}: ChIP control rows must have blank control_id")
-        if assay.startswith("chip") and role == "treatment" and control_id:
-            if role_by_sample.get(str(control_id)) != "control":
+        if assay.startswith("chip") and role == "control" and control_library:
+            raise AcquisitionError(
+                f"Line {line}: ChIP control rows must have blank control_library"
+            )
+        if assay.startswith("chip") and role == "treatment" and control_library:
+            if role_by_library.get(str(control_library)) != "control":
                 raise AcquisitionError(
-                    f"Line {line}: control_id {control_id!r} does not name a control sample"
+                    f"Line {line}: control_library {control_library!r} does not name "
+                    "a control library"
                 )
-            control = by_sample[str(control_id)][0]
-            if control["assay"] != assay or control["genome"] != row["genome"]:
+            control = by_library[str(control_library)][0]
+            if control["assay"] != assay or control["context"] != row["context"]:
                 raise AcquisitionError(
-                    f"Line {line}: treatment and control must have the same assay and genome"
+                    f"Line {line}: treatment and control must have the same assay and context"
                 )
 
 
@@ -271,6 +278,7 @@ def read_sample_sheet(
                 parsed[name] = value
         parsed["__line__"] = line
         parsed["__supplied__"] = {name for name, value in raw.items() if value}
+        parsed["assay"] = ASSAY_ALIASES.get(str(parsed["assay"]), parsed["assay"])
         _resolve_defaults(parsed, schema, line=line)
         parsed_rows.append(parsed)
 
