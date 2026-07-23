@@ -280,3 +280,40 @@ rule filter_atac_hmmratac_replicate_support:
         "--overlap-fraction {params.overlap_fraction} "
         "--output-bed {output.bed:q} --support-tsv {output.support:q} "
         "--stats-json {output.stats:q} > {log:q} 2>&1"
+
+
+rule build_atac_master_dhs:
+    input:
+        peaks=list(ATAC_CONDITION_CONSENSUS.values()),
+        signals=list(ATAC_CONDITION_SIGNAL_BW.values()),
+        chrom_sizes=str(REFERENCE["chrom_sizes"]),
+        script=str(REPO_ROOT / "src" / "build_atac_master.py"),
+        implementation=str(REPO_ROOT / "src" / "short_read_processing" / "master_dhs.py")
+    output:
+        bed=ATAC_MASTER_BED,
+        summits=ATAC_MASTER_SUMMITS,
+        membership=ATAC_MASTER_MEMBERSHIP,
+        context_matrix=ATAC_MASTER_CONTEXT_MATRIX,
+        stats=ATAC_MASTER_STATS
+    params:
+        inputs=atac_master_arguments,
+        summit_max_distance=int(ATAC_MASTER.get("summit_max_distance", 150)),
+        minimum_summit_separation=int(
+            ATAC_MASTER.get("minimum_summit_separation", 50)
+        )
+    threads: 4
+    resources:
+        mem_mb=4000
+    conda:
+        "../envs/atac_qc.yaml"
+    log:
+        f"{RESULT_ROOT}/logs/atac/master-dhs.log"
+    shell:
+        "mkdir -p $(dirname {output.bed:q}) $(dirname {log:q}) && "
+        "python {input.script:q} {params.inputs} --chrom-sizes {input.chrom_sizes:q} "
+        "--summit-max-distance {params.summit_max_distance} --workers {threads} "
+        "--minimum-summit-separation {params.minimum_summit_separation} "
+        "--output-bed {output.bed:q} --summit-bed {output.summits:q} "
+        "--membership-tsv {output.membership:q} "
+        "--context-matrix-tsv {output.context_matrix:q} "
+        "--stats-json {output.stats:q} > {log:q} 2>&1"

@@ -79,6 +79,10 @@ ATAC_QPOIS_DEFAULTS = {
     "minimum_length": 50,
     "maximum_length": 400,
 }
+ATAC_MASTER_DEFAULTS = {
+    "summit_max_distance": 150,
+    "minimum_summit_separation": 50,
+}
 
 
 def _safe_id(value: str, label: str) -> str:
@@ -436,6 +440,7 @@ def generate_configs(
                 "minimum_replicates": atac_minimum_replicates,
                 "replicate_overlap_fraction": atac_overlap_fraction,
             }
+            config["atac_master"] = dict(ATAC_MASTER_DEFAULTS)
         output_path = output_dir / f"{group_project}.yaml"
         _write_config_if_changed(output_path, config)
         output_paths.append(output_path.resolve())

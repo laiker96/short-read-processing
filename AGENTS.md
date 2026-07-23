@@ -47,10 +47,17 @@ names, or sample relationships.
   broad components split as the exponent rises. Refined boundaries are not an
   independent FDR-controlled peak call.
 - The sample-sheet `context` column controls ATAC replicate pooling. Replicate
-  calls are evidence; the primary endpoint is a pooled peak covered by the
-  configured fraction in the configured number of biological libraries.
-- Cross-condition atlas merging, H3K27ac integration, and Micro-C integration
-  are outside this processing DAG until explicitly designed.
+  calls are evidence; a context peak must be covered by the configured fraction
+  in the configured number of biological libraries.
+- The final ATAC endpoint is a summit-aware master DHS registry across the
+  replicate-supported contexts. Summits come from pooled context signal;
+  clustering requires reciprocal summit containment, a complete-linkage summit
+  span of at most 150 bp by default, and at most one peak per context. Do not
+  replace this with a simple interval union or fixed-width resizing. Adjacent
+  clusters with representative summits less than 50 bp apart merge only when
+  their context sets are disjoint; a shared context is evidence for two sites.
+- H3K27ac integration, ABC candidate resizing/scoring, and Micro-C integration
+  remain outside this processing DAG.
 - TF ChIP defaults to narrow MACS3 peaks; histone ChIP defaults to broad peaks.
 - ChIP controls are explicit `control_library` relationships. IP-only ChIP is
   represented by omitting that optional column and runs MACS3 without `-c`.

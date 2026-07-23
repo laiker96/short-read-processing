@@ -25,6 +25,7 @@ ATAC_CONSENSUS_FIELDS = {
     "minimum_replicates",
     "replicate_overlap_fraction",
 }
+ATAC_MASTER_FIELDS = {"summit_max_distance", "minimum_summit_separation"}
 REFERENCE_FIELDS = {
     "name",
     "fasta",
@@ -95,6 +96,20 @@ def validate_workflow_config(config: dict[str, Any]) -> None:
             or not consensus["conditions"]
         ):
             raise AcquisitionError("ATAC consensus parameters are invalid")
+    master = config.get("atac_master")
+    if master is not None:
+        if config["assay"] != "atac" or not isinstance(master, dict):
+            raise AcquisitionError("atac_master is only valid for ATAC configurations")
+        _required(master, ATAC_MASTER_FIELDS, "ATAC master DHS")
+        if (
+            int(master["summit_max_distance"]) < 0
+            or int(master["minimum_summit_separation"]) < 0
+            or int(master["minimum_summit_separation"])
+            > int(master["summit_max_distance"])
+        ):
+            raise AcquisitionError("ATAC master DHS parameters are invalid")
+        if not consensus or not consensus.get("enabled"):
+            raise AcquisitionError("ATAC master DHS construction requires ATAC consensus")
     if not isinstance(config["reference"], dict):
         raise AcquisitionError("reference must be a mapping")
     _required(config["reference"], REFERENCE_FIELDS, "Reference")

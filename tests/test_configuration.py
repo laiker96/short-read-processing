@@ -97,6 +97,10 @@ def test_atac_defaults_and_contexts_group_biological_and_technical_runs(tmp_path
         "minimum_replicates": 2,
         "replicate_overlap_fraction": 0.5,
     }
+    assert config["atac_master"] == {
+        "summit_max_distance": 150,
+        "minimum_summit_separation": 50,
+    }
     assert sample["parameters"]["trimming"]["adapter_preset"] == "nextera"
     preparation = config["reference"]["preparation"]
     assert preparation["mode"] == "download"

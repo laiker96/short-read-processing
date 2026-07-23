@@ -51,6 +51,9 @@ def build_session(
     genome: str,
     locus: str,
     chip_root: Path | None = None,
+    final_atac_only: bool = False,
+    chip_one_per_context: bool = False,
+    master_bed: Path | None = None,
 ) -> tuple[int, int, int]:
     conditions_root = atac_root / "conditions"
     conditions = sorted(path for path in conditions_root.iterdir() if path.is_dir())
@@ -69,6 +72,21 @@ def build_session(
     resources = ET.SubElement(session, "Resources")
     panel = ET.SubElement(session, "Panel", name="ATAC conditions and ChIP")
     track_count = 0
+    if master_bed is None:
+        candidate = atac_root / "master" / "master_dhs.bed"
+        master_bed = candidate if candidate.is_file() else None
+    if master_bed is not None:
+        _require([master_bed])
+        add_track(
+            resources,
+            panel,
+            path=master_bed,
+            output=output,
+            name="Master DHS registry",
+            color="106,27,154",
+            signal=False,
+        )
+        track_count += 1
     for condition_root in conditions:
         condition = condition_root.name
         label = condition.upper()
@@ -80,17 +98,27 @@ def build_session(
             inputs = [
                 tracks / f"{condition}.MACS3-pileup.unscaled.bw",
                 qpois,
-                peaks / f"{condition}.candidates.narrowPeak",
-                peaks / f"{condition}.qpois-refined.bed",
                 consensus,
             ]
+            if not final_atac_only:
+                inputs[2:2] = [
+                    peaks / f"{condition}.candidates.narrowPeak",
+                    peaks / f"{condition}.qpois-refined.bed",
+                ]
             _require(inputs)
-            specifications = (
+            specifications = [
                 (inputs[0], f"{label} | MACS3 insertion pileup", "31,120,180", True),
                 (inputs[1], f"{label} | qpois signal", "117,112,179", True),
-                (inputs[2], f"{label} | lenient candidates", "105,105,105", False),
-                (inputs[3], f"{label} | qpois-refined peaks", "230,85,13", False),
-                (inputs[4], f"{label} | replicate-supported peaks", "0,145,130", False),
+            ]
+            if not final_atac_only:
+                specifications.extend(
+                    [
+                        (inputs[2], f"{label} | lenient candidates", "105,105,105", False),
+                        (inputs[3], f"{label} | qpois-refined peaks", "230,85,13", False),
+                    ]
+                )
+            specifications.append(
+                (consensus, f"{label} | replicate-supported peaks", "0,145,130", False)
             )
         else:
             inputs = [
@@ -118,7 +146,15 @@ def build_session(
 
     chip_samples = 0
     if chip_root is not None:
-        for bigwig in sorted((chip_root / "tracks").glob("*.CPM.bw")):
+        bigwigs = sorted((chip_root / "tracks").glob("*.CPM.bw"))
+        if chip_one_per_context:
+            selected: dict[str, Path] = {}
+            for bigwig in bigwigs:
+                sample = bigwig.name.removesuffix(".CPM.bw")
+                context = sample.split("_", 1)[0]
+                selected.setdefault(context, bigwig)
+            bigwigs = [selected[context] for context in sorted(selected)]
+        for bigwig in bigwigs:
             sample = bigwig.name.removesuffix(".CPM.bw")
             peak_dir = chip_root / "peaks" / sample
             peaks = list(peak_dir.glob(f"{sample}_peaks.*Peak"))
@@ -152,6 +188,21 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--genome", default="dm6")
     parser.add_argument("--locus", default="All")
+    parser.add_argument(
+        "--master-bed",
+        type=Path,
+        help="Master DHS BED; defaults to ATAC_ROOT/master/master_dhs.bed when present",
+    )
+    parser.add_argument(
+        "--final-atac-only",
+        action="store_true",
+        help="Include only pooled signal and replicate-supported ATAC peaks",
+    )
+    parser.add_argument(
+        "--chip-one-per-context",
+        action="store_true",
+        help="Include only the first sorted ChIP replicate for each context",
+    )
     args = parser.parse_args()
     condition_n, chip_n, track_n = build_session(
         args.atac_root.resolve(),
@@ -159,6 +210,9 @@ def main() -> int:
         args.genome,
         args.locus,
         args.chip_root.resolve() if args.chip_root else None,
+        args.final_atac_only,
+        args.chip_one_per_context,
+        args.master_bed.resolve() if args.master_bed else None,
     )
     print(
         f"Wrote {condition_n} ATAC conditions, {chip_n} ChIP samples, "

@@ -61,6 +61,11 @@ ATAC_QPOIS = config.get(
 )
 ATAC_CONSENSUS = config.get("atac_consensus", {"enabled": False})
 ATAC_CONSENSUS_ENABLED = bool(ATAC_CONSENSUS.get("enabled"))
+ATAC_MASTER = config.get(
+    "atac_master",
+    {"summit_max_distance": 150, "minimum_summit_separation": 50},
+)
+ATAC_MASTER_ENABLED = ATAC_CONSENSUS_ENABLED
 ATAC_CONDITION_SPECS = (
     condition_specs(
         ATAC_CONSENSUS["conditions"],
@@ -312,6 +317,31 @@ ATAC_CONDITION_STATS = {
     condition: f"{ATAC_ROOT}/conditions/{condition}/peaks/{condition}.replicate-support.json"
     for condition in ATAC_CONDITION_IDS
 }
+ATAC_CONDITION_SIGNAL_BW = {
+    condition: (
+        ATAC_CONDITION_PILEUP_BW[condition]
+        if ATAC_CONDITION_METHOD[condition] == "qpois"
+        else ATAC_CONDITION_HMM_BIGWIGS[condition]
+    )
+    for condition in ATAC_CONDITION_IDS
+}
+ATAC_MASTER_ROOT = f"{ATAC_ROOT}/master"
+ATAC_MASTER_BED = f"{ATAC_MASTER_ROOT}/master_dhs.bed"
+ATAC_MASTER_SUMMITS = f"{ATAC_MASTER_ROOT}/master_dhs_summits.bed"
+ATAC_MASTER_MEMBERSHIP = f"{ATAC_MASTER_ROOT}/master_dhs_membership.tsv"
+ATAC_MASTER_CONTEXT_MATRIX = f"{ATAC_MASTER_ROOT}/master_dhs_context_matrix.tsv"
+ATAC_MASTER_STATS = f"{ATAC_MASTER_ROOT}/master_dhs.json"
+ATAC_MASTER_TARGETS = (
+    [
+        ATAC_MASTER_BED,
+        ATAC_MASTER_SUMMITS,
+        ATAC_MASTER_MEMBERSHIP,
+        ATAC_MASTER_CONTEXT_MATRIX,
+        ATAC_MASTER_STATS,
+    ]
+    if ATAC_MASTER_ENABLED
+    else []
+)
 
 CALLPEAK_NARROW = [
     sample
@@ -406,6 +436,7 @@ FINAL_TARGETS = (
     + list(ATAC_CONDITION_CONSENSUS.values())
     + list(ATAC_CONDITION_SUPPORT.values())
     + list(ATAC_CONDITION_STATS.values())
+    + ATAC_MASTER_TARGETS
     + list(FRIP_TSV.values())
     + list(TSS_PLOTS.values())
     + list(FRAGMENT_HISTOGRAMS.values())

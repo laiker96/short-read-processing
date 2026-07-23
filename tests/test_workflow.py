@@ -169,7 +169,7 @@ def _enable_consensus(config: dict) -> None:
     }
 
 
-def test_qpois_condition_consensus_stops_before_cross_tissue_atlas(tmp_path):
+def test_qpois_condition_consensus_builds_master_dhs_as_final_atac_step(tmp_path):
     config = copy.deepcopy(BASE_CONFIG)
     _add_second_replicate(config)
     _enable_consensus(config)
@@ -183,10 +183,11 @@ def test_qpois_condition_consensus_stops_before_cross_tissue_atlas(tmp_path):
         "atac_condition_pileup_bigwig",
         "atac_condition_qpois_bigwig",
         "filter_atac_qpois_replicate_support",
+        "build_atac_master_dhs",
     ):
         assert rule in output
     assert "replicate-supported.bed" in output
-    assert "build_cross_condition" not in output
+    assert "master_dhs.bed" in output
 
 
 def test_hmmratac_condition_consensus_dry_run(tmp_path):
@@ -200,7 +201,21 @@ def test_hmmratac_condition_consensus_dry_run(tmp_path):
     assert "merge_atac_condition_bams" in output
     assert "hmmratac_condition" in output
     assert "filter_atac_hmmratac_replicate_support" in output
+    assert "build_atac_master_dhs" in output
     assert "call_atac_condition_qpois" not in output
+
+
+def test_workflow_config_rejects_negative_master_summit_distance():
+    config = copy.deepcopy(BASE_CONFIG)
+    _add_second_replicate(config)
+    _enable_consensus(config)
+    config["atac_master"] = {
+        "summit_max_distance": -1,
+        "minimum_summit_separation": 50,
+    }
+
+    with pytest.raises(AcquisitionError, match="master DHS parameters"):
+        validate_workflow_config(config)
 
 
 def test_auto_reference_preparation_dry_run(tmp_path):

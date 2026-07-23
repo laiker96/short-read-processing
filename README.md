@@ -10,7 +10,8 @@ parallel, and produces reproducible peak, signal, and QC outputs.
 
 - **ATAC-seq (default):** two-ended Tn5 insertion sites from proper paired
   fragments shorter than 150 bp, lenient MACS3 candidates, unscaled qpois
-  signal refinement, context-level pooling, and biological-replicate support.
+  signal refinement, context-level pooling, biological-replicate support, and
+  a summit-aware master DHS registry across contexts.
 - **ATAC-seq (optional):** MACS3 HMMRATAC, followed by the same pooled-context
   biological-replicate support step. HMMRATAC requires paired-end data.
 - **TF ChIP-seq:** MACS3 narrow peaks and CPM BigWigs.
@@ -20,10 +21,9 @@ parallel, and produces reproducible peak, signal, and QC outputs.
 - **QC:** FastQC before and after trimming, Cutadapt reports, alignment metrics,
   fragment-aware FRiP, ATAC TSS/fragment profiles, ChIP QC, and MultiQC.
 
-Cross-context ATAC integration, H3K27ac integration, and Micro-C integration
-are deliberately outside the current pipeline endpoint. The retained ATAC
-context peaks and per-biosample H3K27ac outputs are the inputs to that later
-atlas stage.
+The master DHS registry is the final ATAC processing endpoint. H3K27ac
+integration, fixed-width ABC candidate generation, ABC scoring, and Micro-C
+integration remain in the downstream atlas repository.
 
 ## Install
 
@@ -35,6 +35,7 @@ git clone git@github.com:laiker96/short-read-processing.git
 cd short-read-processing
 
 export MAMBA_ROOT_PREFIX="$PWD/.micromamba"
+export XDG_CACHE_HOME="$PWD/.cache"
 micromamba create --prefix "$PWD/.venv" --file environment.yml -y
 ```
 
@@ -116,6 +117,8 @@ One mixed table produces a separate resolved workflow config for each assay.
 ATAC contexts require at least two biological libraries by default, each
 covering at least 50% of a pooled peak. Override these thresholds with
 `--atac-minimum-replicates` and `--atac-overlap-fraction`.
+For ATAC, the default `all` target automatically ends by building the master
+DHS registry; no separate master-building command is required.
 
 Useful boundaries:
 
@@ -173,6 +176,8 @@ For paired-end ATAC, each biological library is processed as follows:
    candidate calling and refinement on the pool.
 8. Retain a pooled peak when the configured number of replicate peak sets each
    cover the configured fraction of its bases.
+9. Find each retained peak's summit in its pooled signal track and reconcile
+   peaks across contexts into a variable-width master DHS registry.
 
 Single-end ATAC follows the same insertion/qpois path without the unavailable
 paired-fragment-length filter. HMMRATAC is an explicit paired-end alternative.
@@ -190,7 +195,7 @@ atac/conditions/<context>/
     <context>.qpois-refined.bed
     <context>.qpois-excluded.bed
     <context>.qpois-refinement.json
-    <context>.replicate-supported.bed       primary ATAC endpoint
+    <context>.replicate-supported.bed       final context-level peak set
     <context>.replicate-support.tsv
     <context>.replicate-support.json
   tracks/
@@ -206,6 +211,52 @@ Qpois-refined BEDs contain BED6 followed by maximum qpois score and selection
 exponent. Replicate-supported BEDs contain BED6 followed by `condition_id`,
 `support_n`, `replicate_n`, `support_fraction`, comma-separated supporting
 library IDs, and `peak_method`.
+
+The final cross-context ATAC outputs are:
+
+```text
+atac/master/
+  master_dhs.bed                  strict BED6 variable-width master intervals
+  master_dhs_summits.bed          one-base representative summits
+  master_dhs_membership.tsv       every contributing context peak
+  master_dhs_context_matrix.tsv   context presence for each master DHS
+  master_dhs.json                 parameters and summary statistics
+```
+
+For qpois contexts, each source summit is the center of the maximum plateau in
+the pooled unscaled MACS3 pileup within that refined peak. HMMRATAC contexts use
+their pooled CPM BigWig. If an interval contains no finite signal, its midpoint
+is used and recorded as a fallback. A source interval extending beyond a
+reference contig is clipped to the contig boundary; the original coordinates
+and clipping flag remain in `master_dhs_membership.tsv`.
+
+Source peaks are considered the same DHS only when each peak contains the
+other's summit, their complete summit span is at most 150 bp (recorded as
+`atac_master.summit_max_distance`), and the cluster does not already contain a
+peak from that context. Narrow peaks are considered first, so a broad peak from
+one context is assigned only to the narrow DHS containing its maximum and
+cannot collapse two sites resolved in another. The representative summit is
+the observed source summit nearest the median of the contributing source
+summits (with deterministic ties).
+
+After this initial clustering, adjacent clusters with representative summits
+less than 50 bp apart are treated as context-shifted calls of the same DHS and
+merged when their context sets are disjoint. They remain separate when at least
+one context contributes a source peak to both clusters, because that context
+independently resolved two sites. The closest eligible pair merges first, and
+the combined source-summit span must still be at most 150 bp. The 50 bp rule is
+recorded as `atac_master.minimum_summit_separation`. Consequently, the default
+qpois workflow does not pad a boundary-clipped master DHS merely to reach 50
+bp. This setting is a minimum separation between representative summits, not a
+minimum final interval width: a sub-50-bp interval may remain when
+shared-context evidence resolves two nearby sites, or when midpoint clipping
+trims an asymmetric source-peak envelope even though neighboring summits are
+at least 50 bp apart.
+
+Final boundaries are the envelope of contributing refined peaks and are
+clipped at the midpoint between adjacent master summits only when their
+envelopes overlap. This step never resizes DHSs to 500 bp; standardized ABC
+windows are constructed downstream.
 
 ChIP endpoints:
 
@@ -280,8 +331,15 @@ micromamba run --prefix "$PWD/.venv" \
   python src/build_igv_session.py \
   results/drosophila-atlas.atac.dm6/ip-only/atac \
   --chip-root results/drosophila-atlas.chip_histone.dm6/ip-only \
-  --output results/atlas.igv.xml --genome dm6
+  --output results/atlas.igv.xml --genome dm6 \
+  --final-atac-only --chip-one-per-context
 ```
+
+The final-only view contains pooled ATAC pileup/qpois tracks and the
+replicate-supported ATAC peaks. The ChIP context option deterministically
+selects the first sorted replicate (normally `rep1`) for each context.
+When `atac/master/master_dhs.bed` exists, it is added automatically as the
+first feature track; use `--master-bed` to select another registry explicitly.
 
 ## Verification
 

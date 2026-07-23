@@ -177,3 +177,15 @@ def atac_consensus_replicate_arguments(wildcards):
         "--replicate {}".format(shlex.quote(f"{sample}={paths[sample]}"))
         for sample in ATAC_CONDITIONS[condition].samples
     )
+
+
+def atac_master_arguments(_wildcards):
+    arguments = []
+    for condition in ATAC_CONDITION_IDS:
+        arguments.extend(
+            ["--context-peaks", f"{condition}={ATAC_CONDITION_CONSENSUS[condition]}"]
+        )
+        arguments.extend(
+            ["--context-signal", f"{condition}={ATAC_CONDITION_SIGNAL_BW[condition]}"]
+        )
+    return shlex.join(arguments)

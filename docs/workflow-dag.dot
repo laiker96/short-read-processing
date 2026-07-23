@@ -11,12 +11,13 @@ digraph workflow {
   atac [label="ATAC replicate peaks\nTn5/MACS3-qpois (default)\nor HMMRATAC", fillcolor="#e8f4ff"];
   pool [label="Pool biological libraries\nwithin each context", fillcolor="#e8f4ff"];
   consensus [label="Replicate-supported\ncontext ATAC peaks", fillcolor="#dff3e5"];
+  master [label="Summit-aware cross-context\nmaster DHS registry", fillcolor="#ccebd6"];
   chip [label="MACS3 ChIP peaks\noptional matched input", fillcolor="#fff2df"];
   chipout [label="Per-biosample ChIP\npeaks + CPM BigWig", fillcolor="#fff2df"];
   qc [label="FRiP + assay QC + MultiQC", fillcolor="#f1e9fa"];
 
   accessions -> download -> preprocess -> align;
-  align -> atac -> pool -> consensus;
+  align -> atac -> pool -> consensus -> master;
   align -> chip -> chipout;
   align -> qc;
   consensus -> qc;

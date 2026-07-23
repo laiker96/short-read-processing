@@ -96,3 +96,6 @@ atac_consensus:
       samples: [atac_rep1, atac_rep2]
   minimum_replicates: 2
   replicate_overlap_fraction: 0.5
+atac_master:
+  summit_max_distance: 150
+  minimum_summit_separation: 50
